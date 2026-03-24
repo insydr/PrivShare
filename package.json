@@ -1,0 +1,45 @@
+{
+  "name": "privshare",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PrivShare - Zero-Trust Document Redaction & Collaboration Platform",
+  "keywords": [
+    "zero-trust",
+    "document-redaction",
+    "webassembly",
+    "wasm",
+    "privacy",
+    "security",
+    "collaboration"
+  ],
+  "author": "PrivShare Team",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev:client & npm run dev:server",
+    "dev:client": "npm run dev --workspace=@privshare/client",
+    "dev:server": "npm run dev --workspace=@privshare/server",
+    "build": "npm run build:wasm && npm run build:client && npm run build:server",
+    "build:client": "npm run build --workspace=@privshare/client",
+    "build:server": "npm run build --workspace=@privshare/server",
+    "build:wasm": "cd packages/wasm-core && wasm-pack build --target web --out-dir ../client/public/wasm",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces",
+    "clean": "npm run clean --workspaces && rm -rf node_modules",
+    "typecheck": "npm run typecheck --workspaces"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.11.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/privshare/privshare.git"
+  }
+}
