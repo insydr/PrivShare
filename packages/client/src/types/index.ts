@@ -4,3 +4,4 @@
  */
 
 export * from './wasm-worker';
+export * from './canvas';

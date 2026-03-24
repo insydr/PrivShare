@@ -1,0 +1,280 @@
+/**
+ * DocumentViewer Styles
+ * =====================
+ * 
+ * Styles for the dual-layer canvas document viewer.
+ */
+
+/* ============================================
+   CONTAINER
+   ============================================ */
+
+.document-viewer {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    height: 100%;
+    background-color: var(--color-bg-primary, #0f172a);
+    border-radius: 0.5rem;
+    overflow: hidden;
+}
+
+/* ============================================
+   TOOLBAR
+   ============================================ */
+
+.viewer-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background-color: var(--color-bg-secondary, #1e293b);
+    border-bottom: 1px solid var(--color-border, #334155);
+}
+
+.tool-group {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.tool-separator {
+    width: 1px;
+    height: 24px;
+    background-color: var(--color-border, #334155);
+    margin: 0 0.5rem;
+}
+
+.tool-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 0.75rem;
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.375rem;
+    color: var(--color-text-secondary, #94a3b8);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.tool-btn:hover:not(:disabled) {
+    background-color: var(--color-bg-tertiary, #334155);
+    color: var(--color-text-primary, #f8fafc);
+}
+
+.tool-btn:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.tool-btn.active {
+    background-color: var(--color-primary, #4f46e5);
+    color: white;
+    border-color: var(--color-primary, #4f46e5);
+}
+
+.tool-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.tool-btn.danger:hover:not(:disabled) {
+    background-color: var(--color-danger, #ef4444);
+    color: white;
+}
+
+.zoom-level {
+    min-width: 50px;
+    text-align: center;
+    font-size: 0.875rem;
+    color: var(--color-text-secondary, #94a3b8);
+    font-family: var(--font-mono, monospace);
+}
+
+.toolbar-info {
+    flex: 1;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.redaction-count {
+    padding: 0.25rem 0.75rem;
+    background-color: var(--color-primary, #4f46e5);
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: white;
+}
+
+/* ============================================
+   CANVAS CONTAINER
+   ============================================ */
+
+.canvas-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    background-color: var(--color-bg-primary, #0f172a);
+    background-image: 
+        linear-gradient(45deg, #1e293b 25%, transparent 25%),
+        linear-gradient(-45deg, #1e293b 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #1e293b 75%),
+        linear-gradient(-45deg, transparent 75%, #1e293b 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+}
+
+.no-document {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 3rem;
+    color: var(--color-text-muted, #64748b);
+    text-align: center;
+}
+
+.no-document p {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 500;
+    color: var(--color-text-secondary, #94a3b8);
+}
+
+.no-document span {
+    font-size: 0.875rem;
+}
+
+/* ============================================
+   CANVAS WRAPPER
+   ============================================ */
+
+.canvas-wrapper {
+    position: relative;
+    background-color: white;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    border-radius: 2px;
+}
+
+/* ============================================
+   CANVAS LAYERS
+   ============================================ */
+
+.image-canvas,
+.overlay-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+}
+
+.image-canvas {
+    z-index: 1;
+    background-color: white;
+}
+
+.overlay-canvas {
+    z-index: 2;
+    /* Transparent by default */
+}
+
+/* ============================================
+   STATUS BAR
+   ============================================ */
+
+.status-bar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 1rem;
+    background-color: var(--color-bg-secondary, #1e293b);
+    border-top: 1px solid var(--color-border, #334155);
+    font-size: 0.75rem;
+    color: var(--color-text-muted, #64748b);
+}
+
+.file-info {
+    font-family: var(--font-mono, monospace);
+}
+
+.processing-status {
+    color: var(--color-warning, #f59e0b);
+}
+
+.hint {
+    margin-left: auto;
+    color: var(--color-text-secondary, #94a3b8);
+}
+
+/* ============================================
+   RESPONSIVE ADJUSTMENTS
+   ============================================ */
+
+@media (max-width: 768px) {
+    .viewer-toolbar {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .tool-btn span {
+        display: none;
+    }
+
+    .tool-btn {
+        padding: 0.5rem;
+    }
+
+    .tool-separator {
+        display: none;
+    }
+
+    .status-bar {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .hint {
+        margin-left: 0;
+        width: 100%;
+    }
+}
+
+/* ============================================
+   DARK MODE SUPPORT (if needed)
+   ============================================ */
+
+@media (prefers-color-scheme: dark) {
+    .canvas-wrapper {
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    }
+}
+
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+
+@keyframes pulse-border {
+    0%, 100% {
+        border-color: var(--color-primary, #4f46e5);
+    }
+    50% {
+        border-color: var(--color-secondary, #10b981);
+    }
+}
+
+.tool-btn.active {
+    animation: pulse-border 2s ease-in-out infinite;
+}
+
+/* ============================================
+   SELECTION STYLES
+   ============================================ */
+
+.canvas-wrapper:focus-within {
+    outline: 2px solid var(--color-primary, #4f46e5);
+    outline-offset: 2px;
+}
