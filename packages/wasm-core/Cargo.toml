@@ -1,9 +1,9 @@
 [package]
 name = "wasm-core"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 authors = ["PrivShare Team"]
-description = "WebAssembly core library for PrivShare - Zero-Trust document redaction"
+description = "WebAssembly core library for PrivShare - Zero-Trust document redaction with SIMD acceleration"
 license = "MIT"
 repository = "https://github.com/insydr/privshare"
 
@@ -11,7 +11,9 @@ repository = "https://github.com/insydr/privshare"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["console_error_panic_hook"]
+default = ["console_error_panic_hook", "simd"]
+simd = []
+parallel = ["rayon"]
 
 [dependencies]
 # WASM JavaScript interop
@@ -23,11 +25,20 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde-wasm-bindgen = "0.6"
 
-# Image processing
-image = "0.25"
+# Image processing with SIMD acceleration
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "bmp",
+    "tiff",
+] }
 
 # Cryptographic hashing (SHA-256)
 sha2 = "0.10"
+
+# Parallel processing for large images
+rayon = { version = "1.10", optional = true }
 
 # Error handling
 console_error_panic_hook = { version = "0.1.7", optional = true }
@@ -36,6 +47,9 @@ thiserror = "1.0"
 
 # Memory efficient types
 base64 = "0.22"
+
+# SIMD detection and utilities
+cfg-if = "1.0"
 
 [dependencies.web-sys]
 version = "0.3.69"
@@ -55,15 +69,32 @@ features = [
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.42"
+criterion = "0.5"
+
+# Performance benchmarking
+[[bench]]
+name = "redaction_benchmark"
+harness = false
 
 [profile.release]
-# Optimize for small WASM binary size while maintaining performance
+# Optimize for maximum performance
 opt-level = 3
-lto = true
+lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
 
+# Enable SIMD instructions
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "target-feature=+simd128,+bulk-memory",
+]
+
 [profile.dev]
-opt-level = 0
+opt-level = 1
 debug = true
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
