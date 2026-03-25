@@ -28,10 +28,15 @@
     "build:wasm:simd": "cd packages/wasm-core && RUSTFLAGS='-C target-feature=+simd128,+bulk-memory' wasm-pack build --target web --out-dir ../client/public/wasm -- --features simd",
     "build:wasm:parallel": "cd packages/wasm-core && RUSTFLAGS='-C target-feature=+simd128,+bulk-memory,+atomics,+bulk-memory-opt' wasm-pack build --target web --out-dir ../client/public/wasm -- --features simd,parallel",
     "build:wasm:release": "cd packages/wasm-core && RUSTFLAGS='-C target-feature=+simd128,+bulk-memory' wasm-pack build --target web --out-dir ../client/public/wasm --release -- --features simd",
+    "build:production": "npm run build && npm run security:validate",
     "test": "npm run test --workspaces",
     "lint": "npm run lint --workspaces",
     "clean": "npm run clean --workspaces && rm -rf node_modules",
-    "typecheck": "npm run typecheck --workspaces"
+    "typecheck": "npm run typecheck --workspaces",
+    "security:check": "npm run security:validate",
+    "security:validate": "node scripts/validate-sri.js --strict",
+    "security:fix": "node scripts/validate-sri.js --fix",
+    "security:report": "node scripts/generate-sri-hash.js"
   },
   "devDependencies": {
     "typescript": "^5.4.0",

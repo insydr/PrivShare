@@ -1,9 +1,15 @@
 /**
- * Vite CSP Plugin
- * =================
+ * Enhanced Vite CSP Plugin with SRI Injection
+ * ===================================
  * 
  * Generates and injects Content Security Policy headers during build.
  * Also handles SRI (Subresource Integrity) hash generation for scripts.
+ * 
+ * This enhanced version:
+ * - Directly injects integrity attributes into HTML script tags
+ * - Generate integrity.json with all file hashes
+ * - Generate csp-headers.txt for server configuration
+ * - Validate SRI hashes during build
  */
 
 import type { Plugin, ResolvedConfig } from 'vite';
@@ -174,6 +180,175 @@ function generateSRIHashes(distDir: string): SRIHash[] {
 }
 
 // ============================================
+// HTML INTEGRITY INJECTOR
+// ============================================
+
+function injectIntegrityIntoHtml(
+    htmlPath: string,
+    hashes: SRIHash[]
+): { modified: boolean; injected: number; errors: string[] } {
+    let htmlContent = fs.readFileSync(htmlPath, 'utf-8');
+    const errors: string[] = [];
+    let injected = 0;
+    
+    for (const { file, hash } of hashes) {
+        // Skip source maps
+        if (file.endsWith('.map') || file.endsWith('.wasm')) {
+            continue;
+        }
+        
+        const fileName = path.basename(file);
+        
+        // Pattern to match script tags for this file
+        // Examples:
+        // <script type="module" crossorigin src="./assets/index-abc123.js"></script>
+        // <script type="module" src="/assets/index-abc123.js"></script>
+        const patterns = [
+            // With crossorigin already present
+            new RegExp(`(<script[^>]*?crossorigin[^>]*?src=["'][^"']*?${fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*?>)`, 'g'),
+            // Without crossorigin
+            new RegExp(`(<script[^>]*?src=["'][^"']*?${fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*?>)`, 'g'),
+        ];
+        
+        let matched = false;
+        for (const pattern of patterns) {
+            const matches = htmlContent.match(pattern);
+            if (matches) {
+                const originalTag = matches[1];
+                
+                // Check if integrity already exists
+                if (originalTag.includes('integrity=')) {
+                    // Verify existing integrity matches
+                    const existingIntegrityMatch = originalTag.match(/integrity="([^"]+)"/);
+                    if (existingIntegrityMatch && existingIntegrityMatch[1] === hash) {
+                        console.log(`[vite-csp-plugin] SRI already correct for: ${fileName}`);
+                    } else {
+                        errors.push(`Integrity mismatch for ${fileName}`);
+                    }
+                    matched = true;
+                    continue;
+                }
+                
+                // Inject integrity and crossorigin
+                let newTag: string;
+                if (originalTag.includes('crossorigin')) {
+                    // Add integrity after crossorigin
+                    newTag = originalTag.replace(
+                        /(crossorigin=["']anonymous["'])/,
+                        `$1 integrity="${hash}" `
+                    );
+                } else {
+                    // Add both crossorigin and integrity
+                    newTag = originalTag.replace(
+                        /(<script[^>]*?src=["'][^"']*?)(["'][^>]*?>)/,
+                        `$1 crossorigin="anonymous" integrity="${hash}"$2`
+                    );
+                }
+                
+                if (newTag !== originalTag) {
+                    htmlContent = htmlContent.replace(originalTag, newTag);
+                    console.log(`[vite-csp-plugin] Injected SRI for: ${fileName}`);
+                    injected++;
+                }
+                
+                matched = true;
+                break;
+            }
+        }
+        
+        if (!matched && !file.includes('.wasm')) {
+            // Try to find script tag with different path formats
+            const altPatterns = [
+                new RegExp(`(<script[^>]*?src=["']\\.?/?assets/${fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'])`, 'g'),
+                new RegExp(`(<script[^>]*?src=["']\\.?/?${fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'])`, 'g'),
+            ];
+            
+            for (const pattern of altPatterns) {
+                const matches = htmlContent.match(pattern);
+                if (matches) {
+                    const originalTag = matches[1];
+                    const newTag = originalTag.replace(
+                        /(<script[^>]*?src=["'][^"']*?)(["'][^>]*?>)/,
+                        `$1 crossorigin="anonymous" integrity="${hash}"$2`
+                    );
+                    htmlContent = htmlContent.replace(originalTag, newTag);
+                    console.log(`[vite-csp-plugin] Injected SRI for: ${fileName} (alt pattern)`);
+                    injected++;
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Write updated HTML
+    fs.writeFileSync(htmlPath, htmlContent);
+    
+    return { modified: true, injected, errors };
+}
+
+// ============================================
+// SRI VALIDATION
+// ============================================
+
+interface SRIValidationResult {
+    valid: boolean;
+    totalScripts: number;
+    scriptsWithIntegrity: number;
+    missingIntegrity: string[];
+    errors: string[];
+}
+
+function validateSRIInDist(distDir: string, hashes: SRIHash[]): SRIValidationResult {
+    const result: SRIValidationResult = {
+        valid: true,
+        totalScripts: 0,
+        scriptsWithIntegrity: 0,
+        missingIntegrity: [],
+        errors: []
+    };
+    
+    // Check index.html for integrity attributes
+    const indexHtmlPath = path.join(distDir, 'index.html');
+    if (fs.existsSync(indexHtmlPath)) {
+        const htmlContent = fs.readFileSync(indexHtmlPath, 'utf-8');
+        
+        // Count script tags
+        const scriptTags = htmlContent.match(/<script[^>]*?src=/g) || [];
+        result.totalScripts = scriptTags.length;
+        
+        // Count script tags with integrity
+        const scriptsWithSRI = htmlContent.match(/<script[^>]*?integrity=/g) || [];
+        result.scriptsWithIntegrity = scriptsWithSRI ? scriptsWithSRI.length : 0;
+        
+        // Find script tags without integrity
+        const scriptTagMatches = htmlContent.matchAll(/<script[^>]*?src=["']([^"']+)["'][^>]*?>/g);
+        for (const match of scriptTagMatches) {
+            const src = match[1];
+            if (!src.includes('integrity=')) {
+                result.missingIntegrity.push(src);
+                result.valid = false;
+            }
+        }
+    }
+    
+    // Verify hashes match actual file contents
+    for (const { file, hash } of hashes) {
+        if (file.endsWith('.js') && !file.endsWith('.map')) {
+            const filePath = path.join(distDir, file);
+            if (fs.existsSync(filePath)) {
+                const actualHash = generateSRIHash(filePath);
+                if (actualHash !== hash) {
+                    result.errors.push(`Hash mismatch for ${file}`);
+                    result.valid = false;
+                }
+            }
+        }
+    }
+    
+    return result;
+}
+
+// ============================================
 // PLUGIN EXPORT
 // ============================================
 
@@ -216,14 +391,53 @@ export function viteCSPPlugin(options: CSPPluginOptions = {}): Plugin {
                     const hashes = generateSRIHashes(distDir);
                     sriHashes.push(...hashes);
                     
+                    // Inject integrity into HTML
+                    const indexHtmlPath = path.join(distDir, 'index.html');
+                    if (fs.existsSync(indexHtmlPath)) {
+                        const result = injectIntegrityIntoHtml(indexHtmlPath, hashes);
+                        
+                        if (result.injected > 0) {
+                            console.log('[vite-csp-plugin] Injected SRI into ' + result.injected + ' script tags');
+                        }
+                        
+                        if (result.errors.length > 0) {
+                            console.error('[vite-csp-plugin] SRI errors:', result.errors);
+                        }
+                    }
+                    
+                    // Validate SRI
+                    const validation = validateSRIInDist(distDir, hashes);
+                    console.log('[vite-csp-plugin] SRI Validation:');
+                    console.log('  Total scripts: ' + validation.totalScripts);
+                    console.log('  Scripts with SRI: ' + validation.scriptsWithIntegrity);
+                    
+                    if (!validation.valid) {
+                        console.warn('[vite-csp-plugin] SRI validation warnings:');
+                        if (validation.missingIntegrity.length > 0) {
+                            console.warn('  Missing integrity:', validation.missingIntegrity);
+                        }
+                        if (validation.errors.length > 0) {
+                            console.error('  Errors:', validation.errors);
+                        }
+                    } else {
+                        console.log('[vite-csp-plugin] ✅ All scripts have valid SRI integrity');
+                    }
+                    
                     // Write integrity.json
                     const integrityPath = path.join(distDir, 'integrity.json');
                     const integrityData = {
                         generated: new Date().toISOString(),
+                        environment: process.env.NODE_ENV || config.mode,
+                        buildHash: crypto.createHash('sha256').update(JSON.stringify(hashes)).digest('hex').substring(0, 16),
                         hashes: hashes.reduce((acc, { file, hash }) => {
                             acc[file] = hash;
                             return acc;
                         }, {} as Record<string, string>),
+                        validation: {
+                            totalScripts: validation.totalScripts,
+                            scriptsWithIntegrity: validation.scriptsWithIntegrity,
+                            valid: validation.valid
+                        },
                         csp: {
                             development: generateCSP(options, true),
                             production: generateCSP(options, false)
@@ -250,7 +464,23 @@ export function viteCSPPlugin(options: CSPPluginOptions = {}): Plugin {
             
             const csp = generateCSP(options, false);
             
-            const headersContent = '# Content Security Policy Header for PrivShare\n# Add this to your Nginx or Apache configuration\n#\n# Nginx:\n# add_header Content-Security-Policy "' + csp + '" always;\n#\n# Apache (.htaccess):\n# Header set Content-Security-Policy "' + csp + '"\n#\n# Additional Security Headers:\n# X-Frame-Options: DENY\n# X-Content-Type-Options: nosniff\n# X-XSS-Protection: 1; mode=block\n# Referrer-Policy: strict-origin-when-cross-origin\n# Permissions-Policy: accelerometer=(), camera=(), geolocation=(), microphone=()\n# Strict-Transport-Security: max-age=31536000; includeSubDomains; preload\n';
+            const headersContent = `# Content Security Policy Header for PrivShare
+# Add this to your Nginx or Apache configuration
+#
+# Nginx:
+# add_header Content-Security-Policy "${csp}" always;
+#
+# Apache (.htaccess):
+# Header set Content-Security-Policy "${csp}"
+#
+# Additional Security Headers:
+# X-Frame-Options: DENY
+# X-Content-Type-Options: nosniff
+# X-XSS-Protection: 1; mode=block
+# Referrer-Policy: strict-origin-when-cross-origin
+# Permissions-Policy: accelerometer=(), camera=(), geolocation=(), microphone=()
+# Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+`;
             
             fs.writeFileSync(cspHeadersPath, headersContent);
             console.log('[vite-csp-plugin] Generated csp-headers.txt');

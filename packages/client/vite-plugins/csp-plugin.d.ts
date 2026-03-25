@@ -1,9 +1,15 @@
 /**
- * Vite CSP Plugin
- * =================
+ * Enhanced Vite CSP Plugin with SRI Injection
+ * ===================================
  *
  * Generates and injects Content Security Policy headers during build.
  * Also handles SRI (Subresource Integrity) hash generation for scripts.
+ *
+ * This enhanced version:
+ * - Directly injects integrity attributes into HTML script tags
+ * - Generate integrity.json with all file hashes
+ * - Generate csp-headers.txt for server configuration
+ * - Validate SRI hashes during build
  */
 import type { Plugin } from 'vite';
 interface CSPPluginOptions {

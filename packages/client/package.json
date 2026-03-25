@@ -8,11 +8,14 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:sri": "node ../../scripts/generate-sri-hash.js",
-    "build:production": "npm run build && npm run build:sri",
+    "build:validate": "node ../../scripts/validate-sri.js --strict",
+    "build:production": "npm run build && npm run build:sri && npm run build:validate",
     "preview": "vite preview",
     "lint": "eslint src --ext .ts,.tsx --report-unused-disable-directives --max-warnings 0",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist node_modules"
+    "clean": "rm -rf dist node_modules",
+    "security:check": "npm run build:validate",
+    "security:fix": "node ../../scripts/validate-sri.js --fix"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.28.0",
