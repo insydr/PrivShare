@@ -5,3 +5,4 @@
 
 export * from './wasm-worker';
 export * from './canvas';
+export * from './collaboration';

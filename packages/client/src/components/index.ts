@@ -4,3 +4,4 @@
  */
 
 export { DocumentViewer } from './DocumentViewer';
+export { CollaboratorCursors, CollaboratorList } from './CollaboratorCursors';

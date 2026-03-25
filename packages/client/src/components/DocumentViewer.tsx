@@ -11,6 +11,7 @@
  * - Mouse event handlers for drawing redaction boxes
  * - WASM-powered redaction processing (non-blocking via Web Worker)
  * - Download functionality for redacted documents
+ * - Real-time collaboration with cursor sync and redaction sync
  */
 
 import React, {
@@ -23,8 +24,10 @@ import React, {
 import type { Point, Rect, RedactionBox, RedactionTool } from '../types/canvas';
 import { generateRedactionId, pointInRect } from '../types/canvas';
 import type { Box } from '../types/wasm-worker';
+import type { SyncedRedactionBox } from '../types/collaboration';
 import { useDocumentStore } from '../store/documentStore';
 import { useWasmProcessor } from '../hooks/useWasmProcessor';
+import { CollaboratorCursors, CollaboratorList } from './CollaboratorCursors';
 import './DocumentViewer.css';
 
 // ============================================
@@ -33,6 +36,8 @@ import './DocumentViewer.css';
 
 interface DocumentViewerProps {
     className?: string;
+    enableCollaboration?: boolean;
+    roomId?: string;
 }
 
 // ============================================
@@ -44,32 +49,35 @@ const DEFAULT_MANUAL_COLOR = '#FF0000';    // Red for manual
 const SELECTED_COLOR = '#00FF00';          // Green for selected
 const REDACTION_OPACITY = 0.4;
 const MIN_BOX_SIZE = 5; // Minimum box size in pixels
+const CURSOR_SYNC_THROTTLE = 50; // ms between cursor syncs
 
 // ============================================
 // DOCUMENT VIEWER COMPONENT
 // ============================================
 
-export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }) => {
+export const DocumentViewer: React.FC<DocumentViewerProps> = ({ 
+    className = '',
+    enableCollaboration = false,
+}) => {
     // ============================================
     // STATE FROM STORE
     // ============================================
 
     const {
-        document,
+        document: doc,
         imageData,
         currentBuffer,
         processing,
         zoom,
         selectedRedaction,
+        collaboration,
         setZoom,
         addRedaction,
         removeRedaction,
         setSelectedRedaction,
         setProcessing,
-        setImageData,
-        setCurrentBuffer,
-        setPreviewBuffer,
         clearDocument,
+        mergeRemoteRedactions,
     } = useDocumentStore();
 
     // ============================================
@@ -78,8 +86,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
 
     const {
         isReady: wasmReady,
-        loadingState: wasmLoadingState,
-        error: wasmError,
         redactMultiple,
         getHash,
     } = useWasmProcessor({ autoInit: true, debug: true });
@@ -96,6 +102,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
     const [scale, setScale] = useState(1);
     const [isProcessed, setIsProcessed] = useState(false);
     const [redactedBuffer, setRedactedBuffer] = useState<ArrayBuffer | null>(null);
+    const [isFinalized, setIsFinalized] = useState(false);
 
     // ============================================
     // REFS
@@ -104,14 +111,41 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
     const containerRef = useRef<HTMLDivElement>(null);
     const imageCanvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+    const lastCursorSyncRef = useRef<number>(0);
 
     // ============================================
     // DERIVED VALUES
     // ============================================
 
-    const redactionBoxes = useMemo(() => document?.redactions ?? [], [document?.redactions]);
+    const redactionBoxes = useMemo(() => doc?.redactions ?? [], [doc?.redactions]);
     const hasDocument = imageData !== null;
     const isProcessing = processing.stage !== 'idle' && processing.stage !== 'error';
+    const isConnected = collaboration.connectionState === 'connected';
+    const currentUserId = collaboration.currentUserId;
+
+    // ============================================
+    // COLLABORATION: HANDLE REMOTE REDACTION SYNC
+    // ============================================
+
+    useEffect(() => {
+        if (!enableCollaboration) return;
+
+        const handleRemoteSync = (event: CustomEvent<{ boxes: SyncedRedactionBox[]; userId: string }>) => {
+            const { boxes, userId } = event.detail;
+            
+            // Don't merge if this is from us
+            if (userId === currentUserId) return;
+            
+            console.log('[DocumentViewer] Received remote redactions from:', userId);
+            mergeRemoteRedactions(boxes, userId);
+        };
+
+        window.addEventListener('collaboration:redaction-sync', handleRemoteSync as EventListener);
+
+        return () => {
+            window.removeEventListener('collaboration:redaction-sync', handleRemoteSync as EventListener);
+        };
+    }, [enableCollaboration, currentUserId, mergeRemoteRedactions]);
 
     // ============================================
     // CANVAS SETUP & RESIZE
@@ -192,7 +226,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         // Create temporary canvas for ImageData scaling
-        const tempCanvas = document.createElement('canvas');
+        const tempCanvas = window.document.createElement('canvas');
         tempCanvas.width = imageData.width;
         tempCanvas.height = imageData.height;
         const tempCtx = tempCanvas.getContext('2d');
@@ -256,8 +290,8 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         // Clear overlay
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Don't show overlay boxes if already processed
-        if (isProcessed) return;
+        // Don't show overlay boxes if already processed/finalized
+        if (isProcessed || isFinalized) return;
 
         // Draw existing redaction boxes
         redactionBoxes.forEach((box) => {
@@ -287,6 +321,15 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
             ctx.setLineDash(isSelected ? [] : [5, 5]);
             ctx.strokeRect(scaledRect.x, scaledRect.y, scaledRect.width, scaledRect.height);
             ctx.setLineDash([]);
+
+            // Show collaborator indicator if box is from another user
+            if (box.userId && box.userId !== currentUserId) {
+                ctx.fillStyle = '#3b82f6';
+                ctx.globalAlpha = 1;
+                ctx.beginPath();
+                ctx.arc(scaledRect.x + scaledRect.width - 5, scaledRect.y + 5, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
         });
 
         // Draw current drawing preview
@@ -310,7 +353,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
             ctx.setLineDash([]);
         }
 
-    }, [redactionBoxes, currentRect, isDrawing, scale, canvasSize, selectedRedaction, isProcessed]);
+    }, [redactionBoxes, currentRect, isDrawing, scale, canvasSize, selectedRedaction, isProcessed, isFinalized, currentUserId]);
 
     // ============================================
     // MOUSE EVENT HANDLERS
@@ -334,7 +377,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
      * Handle mouse down - start drawing or select existing box
      */
     const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!hasDocument || isProcessed || isProcessing) return;
+        if (!hasDocument || isProcessed || isProcessing || isFinalized) return;
 
         const point = getCanvasCoordinates(e);
 
@@ -363,12 +406,26 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
             setCurrentRect({ x: point.x, y: point.y, width: 0, height: 0 });
             setSelectedRedaction(null);
         }
-    }, [hasDocument, isProcessed, isProcessing, getCanvasCoordinates, currentTool, redactionBoxes, removeRedaction, setSelectedRedaction]);
+    }, [hasDocument, isProcessed, isProcessing, isFinalized, getCanvasCoordinates, currentTool, redactionBoxes, removeRedaction, setSelectedRedaction]);
 
     /**
-     * Handle mouse move - update drawing preview
+     * Handle mouse move - update drawing preview and sync cursor
      */
     const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+        // Sync cursor position for collaboration
+        if (enableCollaboration && isConnected) {
+            const now = Date.now();
+            if (now - lastCursorSyncRef.current >= CURSOR_SYNC_THROTTLE) {
+                lastCursorSyncRef.current = now;
+                const point = getCanvasCoordinates(e);
+                // Cursor sync is handled by the hook via custom event
+                window.dispatchEvent(new CustomEvent('canvas:cursor-move', {
+                    detail: { x: point.x, y: point.y },
+                }));
+            }
+        }
+
+        // Update drawing preview
         if (!isDrawing || !drawStart) return;
 
         const point = getCanvasCoordinates(e);
@@ -379,7 +436,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         const height = Math.abs(point.y - drawStart.y);
 
         setCurrentRect({ x, y, width, height });
-    }, [isDrawing, drawStart, getCanvasCoordinates]);
+    }, [enableCollaboration, isConnected, isDrawing, drawStart, getCanvasCoordinates]);
 
     /**
      * Handle mouse up - finalize redaction box
@@ -406,12 +463,24 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
 
             addRedaction(newBox);
             console.log('[DocumentViewer] Created redaction:', newBox);
+
+            // Sync to collaborators if enabled
+            if (enableCollaboration && isConnected) {
+                const syncedBox: SyncedRedactionBox = {
+                    ...newBox,
+                    userId: currentUserId || 'local',
+                    timestamp: Date.now(),
+                };
+                window.dispatchEvent(new CustomEvent('canvas:redaction-add', {
+                    detail: { box: syncedBox },
+                }));
+            }
         }
 
         setIsDrawing(false);
         setDrawStart(null);
         setCurrentRect(null);
-    }, [isDrawing, currentRect, addRedaction]);
+    }, [isDrawing, currentRect, addRedaction, enableCollaboration, isConnected, currentUserId]);
 
     /**
      * Handle mouse leave - cancel drawing
@@ -425,15 +494,15 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
     }, [isDrawing]);
 
     // ============================================
-    // WASM PROCESSING - PROCESS BUTTON
+    // WASM PROCESSING - FINALIZE BUTTON
     // ============================================
 
     /**
-     * Process redactions - send to WASM worker
+     * Finalize redactions - send to WASM worker (only triggered by button click)
      */
-    const handleProcess = useCallback(async () => {
+    const handleFinalize = useCallback(async () => {
         if (!currentBuffer || !document || !wasmReady) {
-            console.error('[DocumentViewer] Cannot process: missing buffer or WASM not ready');
+            console.error('[DocumentViewer] Cannot finalize: missing buffer or WASM not ready');
             return;
         }
 
@@ -445,7 +514,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         setProcessing({ stage: 'redacting', progress: 0, message: 'Preparing redactions...' });
 
         try {
-            console.log('[DocumentViewer] Processing', redactionBoxes.length, 'redactions...');
+            console.log('[DocumentViewer] Finalizing', redactionBoxes.length, 'redactions...');
 
             // Convert redaction boxes to Box format for WASM
             const boxes: Box[] = redactionBoxes.map((r) => ({
@@ -471,15 +540,18 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
             // Update state with redacted image
             setRedactedBuffer(result.pngBuffer);
             setIsProcessed(true);
+            setIsFinalized(true);
 
             // Update document with redacted hash
-            document.redactedHash = redactedHash;
+            if (doc) {
+                doc.redactedHash = redactedHash;
+            }
 
-            console.log('[DocumentViewer] Redaction complete!');
+            console.log('[DocumentViewer] Finalization complete!');
             console.log('[DocumentViewer] Pixels burned:', result.redactedPixels);
             console.log('[DocumentViewer] Redacted hash:', redactedHash);
 
-            setProcessing({ stage: 'idle', progress: 100, message: 'Redaction complete!' });
+            setProcessing({ stage: 'idle', progress: 100, message: 'Finalized!' });
 
             // Clear processing state after a delay
             setTimeout(() => {
@@ -487,14 +559,14 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
             }, 2000);
 
         } catch (error) {
-            console.error('[DocumentViewer] Processing failed:', error);
+            console.error('[DocumentViewer] Finalization failed:', error);
             setProcessing({
                 stage: 'error',
                 progress: 0,
-                message: error instanceof Error ? error.message : 'Processing failed',
+                message: error instanceof Error ? error.message : 'Finalization failed',
             });
         }
-    }, [currentBuffer, document, wasmReady, redactionBoxes, redactMultiple, getHash, setProcessing]);
+    }, [currentBuffer, doc, wasmReady, redactionBoxes, redactMultiple, getHash, setProcessing]);
 
     // ============================================
     // DOWNLOAD FUNCTIONALITY
@@ -504,13 +576,12 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
      * Download the redacted document
      */
     const handleDownload = useCallback(() => {
-        if (!redactedBuffer && !currentBuffer) {
+        // Use redacted buffer if available, otherwise original
+        const bufferToDownload = redactedBuffer || currentBuffer;
+        if (!bufferToDownload) {
             console.error('[DocumentViewer] No buffer to download');
             return;
         }
-
-        // Use redacted buffer if available, otherwise original
-        const bufferToDownload = redactedBuffer || currentBuffer;
         const isRedacted = !!redactedBuffer;
 
         // Create blob from buffer
@@ -518,39 +589,39 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         const url = URL.createObjectURL(blob);
 
         // Generate filename
-        const originalName = document?.name || 'document';
+        const originalName = doc?.name || 'document';
         const baseName = originalName.replace(/\.[^.]+$/, '');
         const fileName = isRedacted 
             ? `${baseName}_redacted.png`
             : `${baseName}_original.png`;
 
         // Trigger download
-        const link = document.createElement('a');
+        const link = window.document.createElement('a');
         link.href = url;
         link.download = fileName;
-        document.body.appendChild(link);
+        window.document.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
+        window.document.body.removeChild(link);
 
         // Cleanup
         URL.revokeObjectURL(url);
 
         console.log('[DocumentViewer] Downloaded:', fileName);
-    }, [redactedBuffer, currentBuffer, document]);
+    }, [redactedBuffer, currentBuffer, doc]);
 
     /**
      * Download audit report (hashes)
      */
     const handleDownloadAudit = useCallback(() => {
-        if (!document) return;
+        if (!doc) return;
 
         const auditInfo = {
-            fileName: document.name,
-            originalHash: document.originalHash,
-            redactedHash: document.redactedHash,
-            redactionCount: document.redactions.length,
+            fileName: doc.name,
+            originalHash: doc.originalHash,
+            redactedHash: doc.redactedHash,
+            redactionCount: doc.redactions.length,
             processedAt: new Date().toISOString(),
-            redactions: document.redactions.map((r) => ({
+            redactions: doc.redactions.map((r) => ({
                 x: r.x,
                 y: r.y,
                 width: r.width,
@@ -562,23 +633,23 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         const blob = new Blob([JSON.stringify(auditInfo, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
 
-        const link = document.createElement('a');
+        const link = window.document.createElement('a');
         link.href = url;
-        link.download = `${document.name.replace(/\.[^.]+$/, '')}_audit.json`;
-        document.body.appendChild(link);
+        link.download = `${doc.name.replace(/\.[^.]+$/, '')}_audit.json`;
+        window.document.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
+        window.document.body.removeChild(link);
 
         URL.revokeObjectURL(url);
         console.log('[DocumentViewer] Audit report downloaded');
-    }, [document]);
+    }, [doc]);
 
     // ============================================
     // RESET FUNCTIONALITY
     // ============================================
 
     /**
-     * Reset to original document (undo processing)
+     * Reset to original document (undo finalization)
      */
     const handleReset = useCallback(() => {
         if (!confirm('Reset to original document? This will clear all redactions.')) {
@@ -587,6 +658,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         
         setIsProcessed(false);
         setRedactedBuffer(null);
+        setIsFinalized(false);
         clearDocument();
     }, [clearDocument]);
 
@@ -612,18 +684,18 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                 setZoom(Math.max(zoom - 0.1, 0.1));
             }
 
-            // Ctrl+P to process
-            if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+            // Ctrl+Enter to finalize
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault();
-                if (hasDocument && !isProcessed && redactionBoxes.length > 0) {
-                    handleProcess();
+                if (hasDocument && !isFinalized && redactionBoxes.length > 0) {
+                    handleFinalize();
                 }
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedRedaction, removeRedaction, setSelectedRedaction, zoom, setZoom, hasDocument, isProcessed, redactionBoxes.length, handleProcess]);
+    }, [selectedRedaction, removeRedaction, setSelectedRedaction, zoom, setZoom, hasDocument, isFinalized, redactionBoxes.length, handleFinalize]);
 
     // ============================================
     // TOOLBAR ACTIONS
@@ -661,7 +733,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                         className={`tool-btn ${currentTool === 'draw' ? 'active' : ''}`}
                         onClick={() => setCurrentTool('draw')}
                         title="Draw Redaction (D)"
-                        disabled={!hasDocument || isProcessed || isProcessing}
+                        disabled={!hasDocument || isFinalized || isProcessing}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -672,7 +744,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                         className={`tool-btn ${currentTool === 'select' ? 'active' : ''}`}
                         onClick={() => setCurrentTool('select')}
                         title="Select (S)"
-                        disabled={!hasDocument || isProcessed || isProcessing}
+                        disabled={!hasDocument || isFinalized || isProcessing}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
@@ -683,7 +755,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                         className={`tool-btn ${currentTool === 'erase' ? 'active' : ''}`}
                         onClick={() => setCurrentTool('erase')}
                         title="Erase (E)"
-                        disabled={!hasDocument || isProcessed || isProcessing}
+                        disabled={!hasDocument || isFinalized || isProcessing}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M20 5H9l-7 7 7 7h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Z" />
@@ -737,19 +809,20 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
 
                 <div className="tool-separator" />
 
-                {/* Process & Download Buttons */}
+                {/* Finalize & Download Buttons */}
                 <div className="tool-group action-buttons">
-                    {!isProcessed ? (
+                    {!isFinalized ? (
                         <button
-                            className="tool-btn primary"
-                            onClick={handleProcess}
-                            title="Process Redactions (Ctrl+P)"
+                            className="tool-btn primary finalize-btn"
+                            onClick={handleFinalize}
+                            title="Finalize Redactions (Ctrl+Enter)"
                             disabled={!hasDocument || redactionBoxes.length === 0 || isProcessing || !wasmReady}
                         >
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <polygon points="5 3 19 12 5 21 5 3" />
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                                <polyline points="22 4 12 14.01 9 11.01" />
                             </svg>
-                            <span>Process</span>
+                            <span>Finalize</span>
                         </button>
                     ) : (
                         <button
@@ -776,10 +849,10 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                             <polyline points="7 10 12 15 17 10" />
                             <line x1="12" y1="15" x2="12" y2="3" />
                         </svg>
-                        <span>{isProcessed ? 'Download' : 'Download Original'}</span>
+                        <span>{isFinalized ? 'Download' : 'Download Original'}</span>
                     </button>
 
-                    {isProcessed && (
+                    {isFinalized && (
                         <button
                             className="tool-btn audit"
                             onClick={handleDownloadAudit}
@@ -803,7 +876,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                         className="tool-btn danger"
                         onClick={handleClearAll}
                         title="Clear All Redactions"
-                        disabled={redactionBoxes.length === 0 || isProcessed}
+                        disabled={redactionBoxes.length === 0 || isFinalized}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <polyline points="3 6 5 6 21 6" />
@@ -820,14 +893,19 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                     {!wasmReady && (
                         <span className="wasm-status loading">Loading WASM...</span>
                     )}
-                    {redactionBoxes.length > 0 && !isProcessed && (
+                    {redactionBoxes.length > 0 && !isFinalized && (
                         <span className="redaction-count">
                             {redactionBoxes.length} redaction{redactionBoxes.length !== 1 ? 's' : ''}
                         </span>
                     )}
-                    {isProcessed && (
-                        <span className="processed-badge">
-                            ✓ Processed
+                    {isFinalized && (
+                        <span className="finalized-badge">
+                            ✓ Finalized
+                        </span>
+                    )}
+                    {enableCollaboration && isConnected && (
+                        <span className="collab-status connected">
+                            {collaboration.collaborators.length + 1} users
                         </span>
                     )}
                 </div>
@@ -872,11 +950,28 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                             onMouseLeave={handleMouseLeave}
                             style={{
                                 cursor: isProcessing ? 'wait' :
-                                        isProcessed ? 'default' :
+                                        isFinalized ? 'default' :
                                         currentTool === 'draw' ? 'crosshair' :
                                         currentTool === 'erase' ? 'not-allowed' : 'default',
                             }}
                         />
+
+                        {/* Collaborator Cursors Overlay */}
+                        {enableCollaboration && (
+                            <CollaboratorCursors
+                                cursors={collaboration.cursors}
+                                currentUserId={currentUserId}
+                                scale={scale}
+                            />
+                        )}
+
+                        {/* Collaborator List */}
+                        {enableCollaboration && isConnected && collaboration.collaborators.length > 0 && (
+                            <CollaboratorList
+                                collaborators={collaboration.collaborators}
+                                currentUserId={currentUserId}
+                            />
+                        )}
                     </div>
                 )}
 
@@ -905,23 +1000,23 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
             {hasDocument && (
                 <div className="status-bar">
                     <span className="file-info">
-                        {document?.name} • {document?.width}×{document?.height}px
+                        {doc?.name} • {doc?.width}×{doc?.height}px
                     </span>
-                    {document?.originalHash && (
-                        <span className="hash-info" title={`SHA-256: ${document.originalHash}`}>
-                            Original: {document.originalHash.substring(0, 12)}...
+                    {doc?.originalHash && (
+                        <span className="hash-info" title={`SHA-256: ${doc.originalHash}`}>
+                            Original: {doc.originalHash.substring(0, 12)}...
                         </span>
                     )}
-                    {document?.redactedHash && (
-                        <span className="hash-info redacted" title={`SHA-256: ${document.redactedHash}`}>
-                            Redacted: {document.redactedHash.substring(0, 12)}...
+                    {doc?.redactedHash && (
+                        <span className="hash-info redacted" title={`SHA-256: ${doc.redactedHash}`}>
+                            Redacted: {doc.redactedHash.substring(0, 12)}...
                         </span>
                     )}
-                    {!isProcessed && currentTool === 'draw' && (
+                    {!isFinalized && currentTool === 'draw' && (
                         <span className="hint">Click and drag to draw redaction box</span>
                     )}
-                    {isProcessed && (
-                        <span className="hint success">Document redacted. Click Download to save.</span>
+                    {isFinalized && (
+                        <span className="hint success">Document finalized. Click Download to save.</span>
                     )}
                 </div>
             )}

@@ -6,10 +6,19 @@
  * Integrates with WASM Web Worker for all heavy processing.
  * 
  * All data is stored locally in browser memory - never sent to any server.
+ * 
+ * Collaboration features sync only JSON metadata (coordinates), never files.
  */
 
 import { create } from 'zustand';
 import type { Box, ImageInfo, TextRegion, PiiMatch } from '../types/wasm-worker';
+import type { 
+    Collaborator, 
+    CursorPosition, 
+    SyncedRedactionBox,
+    ConnectionState 
+} from '../types/collaboration';
+import { mergeRedactions } from '../types/collaboration';
 
 // ============================================
 // TYPES
@@ -25,6 +34,8 @@ export interface RedactionArea {
     type: 'auto' | 'manual';
     piiType?: string;
     confidence?: number;
+    createdAt?: number;
+    userId?: string;
 }
 
 export interface Document {
@@ -50,6 +61,15 @@ export interface ProcessingState {
     message: string;
 }
 
+export interface CollaborationState {
+    connectionState: ConnectionState;
+    roomId: string | null;
+    currentUserId: string | null;
+    collaborators: Collaborator[];
+    cursors: CursorPosition[];
+    isCollabEnabled: boolean;
+}
+
 interface DocumentState {
     // Document data
     document: Document | null;
@@ -69,6 +89,9 @@ interface DocumentState {
     // WASM state
     wasmReady: boolean;
     wasmError: string | null;
+    
+    // Collaboration state
+    collaboration: CollaborationState;
     
     // Actions - Document
     setDocument: (doc: Document | null) => void;
@@ -97,6 +120,21 @@ interface DocumentState {
     setZoom: (zoom: number) => void;
     toggleRedactionPreview: () => void;
     
+    // Actions - Collaboration
+    setConnectionState: (state: ConnectionState) => void;
+    setRoomId: (roomId: string | null) => void;
+    setCurrentUserId: (userId: string | null) => void;
+    setCollaborators: (collaborators: Collaborator[]) => void;
+    addCollaborator: (collaborator: Collaborator) => void;
+    removeCollaborator: (userId: string) => void;
+    updateCursor: (cursor: CursorPosition) => void;
+    removeCursor: (userId: string) => void;
+    setCollabEnabled: (enabled: boolean) => void;
+    
+    // Actions - Remote Redaction Sync (last-write-wins)
+    mergeRemoteRedactions: (remoteBoxes: SyncedRedactionBox[], remoteUserId: string) => void;
+    replaceRedactions: (redactions: RedactionArea[]) => void;
+    
     // Actions - Reset
     clearDocument: () => void;
     reset: () => void;
@@ -105,6 +143,15 @@ interface DocumentState {
 // ============================================
 // INITIAL STATE
 // ============================================
+
+const initialCollaborationState: CollaborationState = {
+    connectionState: 'disconnected',
+    roomId: null,
+    currentUserId: null,
+    collaborators: [],
+    cursors: [],
+    isCollabEnabled: false,
+};
 
 const initialState = {
     document: null,
@@ -122,6 +169,7 @@ const initialState = {
     selectedRedaction: null,
     wasmReady: false,
     wasmError: null,
+    collaboration: initialCollaborationState,
 };
 
 // ============================================
@@ -151,7 +199,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         document: state.document
             ? {
                   ...state.document,
-                  redactions: [...state.document.redactions, redaction],
+                  redactions: [...state.document.redactions, {
+                      ...redaction,
+                      createdAt: redaction.createdAt || Date.now(),
+                      userId: redaction.userId || state.collaboration.currentUserId || undefined,
+                  }],
               }
             : null,
     })),
@@ -171,7 +223,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             ? {
                   ...state.document,
                   redactions: state.document.redactions.map((r) =>
-                      r.id === id ? { ...r, ...updates } : r
+                      r.id === id ? { ...r, ...updates, createdAt: Date.now() } : r
                   ),
               }
             : null,
@@ -213,6 +265,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
                 type: 'auto' as const,
                 piiType: match.piiType,
                 confidence: match.confidence,
+                createdAt: Date.now(),
+                userId: 'system',
             };
         });
 
@@ -253,6 +307,121 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     })),
 
     // ============================================
+    // COLLABORATION ACTIONS
+    // ============================================
+
+    setConnectionState: (connectionState) => set((state) => ({
+        collaboration: { ...state.collaboration, connectionState },
+    })),
+
+    setRoomId: (roomId) => set((state) => ({
+        collaboration: { ...state.collaboration, roomId },
+    })),
+
+    setCurrentUserId: (userId) => set((state) => ({
+        collaboration: { ...state.collaboration, currentUserId: userId },
+    })),
+
+    setCollaborators: (collaborators) => set((state) => ({
+        collaboration: { ...state.collaboration, collaborators },
+    })),
+
+    addCollaborator: (collaborator) => set((state) => {
+        // Avoid duplicates
+        if (state.collaboration.collaborators.some(c => c.id === collaborator.id)) {
+            return state;
+        }
+        return {
+            collaboration: {
+                ...state.collaboration,
+                collaborators: [...state.collaboration.collaborators, collaborator],
+            },
+        };
+    }),
+
+    removeCollaborator: (userId) => set((state) => ({
+        collaboration: {
+            ...state.collaboration,
+            collaborators: state.collaboration.collaborators.filter(c => c.id !== userId),
+            cursors: state.collaboration.cursors.filter(c => c.userId !== userId),
+        },
+    })),
+
+    updateCursor: (cursor) => set((state) => {
+        const existingIndex = state.collaboration.cursors.findIndex(
+            c => c.userId === cursor.userId
+        );
+        
+        if (existingIndex >= 0) {
+            const updatedCursors = [...state.collaboration.cursors];
+            updatedCursors[existingIndex] = cursor;
+            return {
+                collaboration: { ...state.collaboration, cursors: updatedCursors },
+            };
+        }
+        
+        return {
+            collaboration: {
+                ...state.collaboration,
+                cursors: [...state.collaboration.cursors, cursor],
+            },
+        };
+    }),
+
+    removeCursor: (userId) => set((state) => ({
+        collaboration: {
+            ...state.collaboration,
+            cursors: state.collaboration.cursors.filter(c => c.userId !== userId),
+        },
+    })),
+
+    setCollabEnabled: (enabled) => set((state) => ({
+        collaboration: { ...state.collaboration, isCollabEnabled: enabled },
+    })),
+
+    // ============================================
+    // REMOTE REDACTION SYNC (LAST-WRITE-WINS)
+    // ============================================
+
+    mergeRemoteRedactions: (remoteBoxes, remoteUserId) => set((state) => {
+        if (!state.document) return state;
+
+        const currentUserId = state.collaboration.currentUserId || 'local';
+        
+        // Convert local redactions to synced format
+        const localBoxes: SyncedRedactionBox[] = state.document.redactions.map(r => ({
+            ...r,
+            userId: r.userId || currentUserId,
+            timestamp: r.createdAt || 0,
+        }));
+
+        // Merge with last-write-wins conflict resolution
+        const merged = mergeRedactions(
+            state.document.redactions,
+            remoteBoxes,
+            currentUserId
+        );
+
+        console.log('[DocumentStore] Merged remote redactions from:', remoteUserId, 
+            'Local:', state.document.redactions.length, 
+            'Remote:', remoteBoxes.length, 
+            'Merged:', merged.length);
+
+        return {
+            document: {
+                ...state.document,
+                redactions: merged,
+            },
+        };
+    }),
+
+    replaceRedactions: (redactions) => set((state) => ({
+        document: state.document
+            ? { ...state.document, redactions }
+            : null,
+    })),
+
+    // ============================================
     // RESET ACTIONS
     // ============================================
 
@@ -285,3 +454,8 @@ export const selectWasmStatus = (state: DocumentState) => ({
     ready: state.wasmReady,
     error: state.wasmError,
 });
+export const selectCollaboration = (state: DocumentState) => state.collaboration;
+export const selectCollaborators = (state: DocumentState) => state.collaboration.collaborators;
+export const selectCursors = (state: DocumentState) => state.collaboration.cursors;
+export const selectIsConnected = (state: DocumentState) => 
+    state.collaboration.connectionState === 'connected';
