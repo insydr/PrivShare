@@ -23,3 +23,12 @@ export type {
     PiiRegion, 
     OcrPiiResult 
 } from './useOcrWithPii';
+
+// P2P File Transfer
+export { useP2PTransfer } from './useP2PTransfer';
+export type { 
+    UseP2PTransferOptions, 
+    UseP2PTransferResult, 
+    TransferState,
+    IncomingTransferRequest
+} from './useP2PTransfer';
