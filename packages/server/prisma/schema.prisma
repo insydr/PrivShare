@@ -1,0 +1,131 @@
+// Prisma schema for PrivShare
+// Zero-trust document sharing platform with ephemeral storage
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// User model for better-auth
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions      Session[]
+  accounts      Account[]
+  shares        EphemeralShare[]
+  shareAccesses ShareAccess[]
+
+  @@map("users")
+}
+
+// Session model for better-auth
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  expiresAt    DateTime
+  token        String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  ipAddress    String?
+  userAgent    String?
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// Account model for better-auth (for OAuth providers if needed)
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  accountId         String
+  providerId        String
+  accessToken       String?
+  refreshToken      String?
+  idToken           String?
+  expiresAt         DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope             String?
+  password          String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@map("accounts")
+}
+
+// Verification model for better-auth (email verification, password reset)
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([identifier, value])
+  @@map("verifications")
+}
+
+// EphemeralShare model for time-limited document sharing
+model EphemeralShare {
+  id              String      @id @default(cuid())
+  code            String      @unique                    // 6-character short code
+  creatorId       String
+  encryptedKey    String                                 // AES-256 encrypted document key
+  keyIv           String                                 // Initialization vector for key encryption
+  documentName    String
+  documentSize    Int
+  documentHash    String                                 // SHA-256 hash for integrity
+  thumbnailBase64 String?                                // Optional preview thumbnail
+  accessMode      AccessMode  @default(VIEW)             // VIEW, DOWNLOAD, TRANSFER
+  maxAccessCount  Int         @default(1)               // Maximum number of accesses
+  currentAccessCount Int      @default(0)               // Current access count
+  expiresAt       DateTime                               // Expiration timestamp
+  passphraseHash  String?                                // Optional passphrase protection (bcrypt hash)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  revokedAt       DateTime?                              // When share was revoked
+
+  creator         User        @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  accesses        ShareAccess[]
+
+  @@index([code])
+  @@index([creatorId])
+  @@index([expiresAt])
+  @@map("ephemeral_shares")
+}
+
+// ShareAccess model for tracking access history
+model ShareAccess {
+  id          String   @id @default(cuid())
+  shareId     String
+  accessedAt  DateTime @default(now())
+  ipAddress   String?
+  userAgent   String?
+  accessType  String                          // 'view', 'download', 'transfer'
+
+  share       EphemeralShare @relation(fields: [shareId], references: [id], onDelete: Cascade)
+
+  @@index([shareId])
+  @@map("share_accesses")
+}
+
+// Access mode enum
+enum AccessMode {
+  VIEW
+  DOWNLOAD
+  TRANSFER
+}

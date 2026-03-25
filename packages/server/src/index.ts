@@ -49,7 +49,9 @@ import dotenv from 'dotenv';
 
 // Routes
 import authRoutes from './routes/auth';
+import authBetterRoutes from './routes/authRoutes';
 import sessionRoutes from './routes/sessionRoutes';
+import shareRoutes from './routes/shareRoutes';
 
 // Middleware
 import { 
@@ -190,7 +192,9 @@ app.use((req, res, next) => {
 // ============================================
 
 app.use('/api/auth', authRoutes);
+app.use('/api/auth', authBetterRoutes);
 app.use('/api', sessionRoutes);
+app.use('/api/share', shareRoutes);
 
 // Root endpoint
 app.get('/', (_req, res) => {
@@ -206,12 +210,21 @@ app.get('/', (_req, res) => {
                 register: 'POST /api/auth/register',
                 login: 'POST /api/auth/login',
                 verify: 'GET /api/auth/verify',
+                me: 'GET /api/auth/me',
+                session: 'GET /api/auth/session',
             },
             sessions: {
                 create: 'POST /api/sessions',
                 get: 'GET /api/sessions/:sessionId',
                 list: 'GET /api/sessions',
                 stats: 'GET /api/sessions/stats',
+            },
+            share: {
+                create: 'POST /api/share/create',
+                info: 'GET /api/share/:code/info',
+                access: 'POST /api/share/:code/access',
+                list: 'GET /api/share/list',
+                revoke: 'DELETE /api/share/:shareId/revoke',
             },
             websocket: 'ws://HOST/ws?roomId=XXX&userId=XXX&token=XXX',
         },
