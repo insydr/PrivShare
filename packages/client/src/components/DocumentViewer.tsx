@@ -28,6 +28,7 @@ import type { SyncedRedactionBox } from '../types/collaboration';
 import { useDocumentStore } from '../store/documentStore';
 import { useWasmProcessor } from '../hooks/useWasmProcessor';
 import { CollaboratorCursors, CollaboratorList } from './CollaboratorCursors';
+import { PolicyValidationModal } from './PolicyValidationModal';
 import './DocumentViewer.css';
 
 // ============================================
@@ -103,6 +104,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     const [isProcessed, setIsProcessed] = useState(false);
     const [redactedBuffer, setRedactedBuffer] = useState<ArrayBuffer | null>(null);
     const [isFinalized, setIsFinalized] = useState(false);
+    const [showPolicyModal, setShowPolicyModal] = useState(false);
 
     // ============================================
     // REFS
@@ -573,7 +575,15 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     // ============================================
 
     /**
-     * Download the redacted document
+     * Initiate download with policy validation
+     */
+    const handleDownloadRequest = useCallback(() => {
+        // Show policy validation modal before download
+        setShowPolicyModal(true);
+    }, []);
+
+    /**
+     * Actual download after validation passes
      */
     const handleDownload = useCallback(() => {
         // Use redacted buffer if available, otherwise original
@@ -840,7 +850,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
                     <button
                         className="tool-btn download"
-                        onClick={handleDownload}
+                        onClick={handleDownloadRequest}
                         title="Download Document"
                         disabled={!hasDocument}
                     >
@@ -1020,6 +1030,13 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                     )}
                 </div>
             )}
+
+            {/* Policy Validation Modal */}
+            <PolicyValidationModal
+                isOpen={showPolicyModal}
+                onClose={() => setShowPolicyModal(false)}
+                onExport={handleDownload}
+            />
         </div>
     );
 };
