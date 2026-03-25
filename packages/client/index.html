@@ -7,23 +7,42 @@
     <meta name="description" content="PrivShare - Zero-Trust Document Redaction & Collaboration Platform" />
     <meta name="theme-color" content="#1a1a2e" />
     
-    <!-- Security: Content Security Policy -->
+    <!-- Security: Content Security Policy (Meta tag - for development) -->
+    <!-- Production CSP is served via Nginx header -->
     <meta http-equiv="Content-Security-Policy" content="
       default-src 'self';
-      script-src 'self' 'wasm-unsafe-eval';
+      script-src 'self' 'wasm-unsafe-eval' blob:;
       worker-src 'self' blob:;
       style-src 'self' 'unsafe-inline';
       img-src 'self' data: blob:;
       font-src 'self';
-      connect-src 'self' ws://localhost:3001 wss://*.privshare.app;
+      connect-src 'self' ws://localhost:3001 wss://*.privshare.app https://api.privshare.app;
       object-src 'none';
       base-uri 'self';
+      frame-src 'none';
+      frame-ancestors 'none';
     " />
+    
+    <!-- Security: X-Frame-Options -->
+    <meta http-equiv="X-Frame-Options" content="DENY" />
+    
+    <!-- Security: X-Content-Type-Options -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    
+    <!-- Security: Referrer-Policy -->
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    
+    <!-- Security: Permissions Policy -->
+    <meta http-equiv="Permissions-Policy" content="accelerometer=(), camera=(), geolocation=(), microphone=(), payment=()" />
     
     <title>PrivShare - Zero-Trust Document Redaction</title>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!-- 
+      SRI integrity attributes will be added during build
+      See: scripts/generate-sri-hash.js
+    -->
   </body>
 </html>

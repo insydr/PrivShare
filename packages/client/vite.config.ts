@@ -1,110 +1,54 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
+import { viteCSPPlugin } from './vite-plugins/csp-plugin';
 
-/**
- * Vite Configuration for PrivShare Client
- * 
- * Key features:
- * - Serves .wasm files with correct MIME type ('application/wasm')
- * - Configures proper headers for WebAssembly compilation
- * - Enables SharedArrayBuffer for multi-threaded WASM (requires COOP/COEP headers)
- * - Enforces strict Content Security Policy for security
- */
+// https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
-  
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
-
-  // Asset handling for WASM files
-  assetsInclude: ['**/*.wasm'],
-  
-  build: {
-    target: 'esnext',
-    outDir: 'dist',
-    sourcemap: true,
-    rollupOptions: {
-      output: {
-        // Ensure WASM files are copied to output
-        assetFileNames: (assetInfo) => {
-          if (assetInfo.name?.endsWith('.wasm')) {
-            return 'wasm/[name]-[hash][extname]';
-          }
-          return 'assets/[name]-[hash][extname]';
+    plugins: [
+        react(),
+        viteCSPPlugin({
+            productionDomain: 'api.privshare.app',
+            wsDomain: 'wss://api.privshare.app',
+            generateSRI: true,
+        }),
+    ],
+    
+    // Build configuration
+    build: {
+        outDir: 'dist',
+        sourcemap: false, // Disable source maps for production
+        minify: 'terser',
+        terserOptions: {
+            compress: {
+                drop_console: true,
+                drop_debugger: true,
+            },
         },
-      },
-    },
-  },
-
-  optimizeDeps: {
-    // Exclude WASM packages from optimization
-    exclude: ['wasm-core'],
-    esbuildOptions: {
-      target: 'esnext',
-    },
-  },
-
-  server: {
-    port: 3000,
-    strictPort: true,
-    
-    // Custom headers for WASM and security
-    headers: {
-      // WASM MIME type - critical for WebAssembly compilation
-      'Content-Type': 'application/wasm',
-      
-      // Required for SharedArrayBuffer (multi-threaded WASM)
-      // These headers enable the browser to create shared memory
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-      
-      // Security headers
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY',
-      'X-XSS-Protection': '1; mode=block',
-      
-      // Content Security Policy for Zero-Trust architecture
-      'Content-Security-Policy': [
-        "default-src 'self'",
-        "script-src 'self' 'wasm-unsafe-eval'",
-        "worker-src 'self' blob:",
-        "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data: blob:",
-        "font-src 'self'",
-        "connect-src 'self' ws://localhost:3001 wss://*.privshare.app",
-        "object-src 'none'",
-        "base-uri 'self'",
-      ].join('; '),
+        rollupOptions: {
+            output: {
+                // Ensure consistent file naming for SRI
+                entryFileNames: 'assets/[name]-[hash].js',
+                chunkFileNames: 'assets/[name]-[hash].js',
+                assetFileNames: 'assets/[name]-[hash].[ext]',
+            },
+        },
     },
     
-    // Proxy for signaling server API
-    proxy: {
-      '/api': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-      },
-      '/ws': {
-        target: 'ws://localhost:3001',
-        ws: true,
-      },
+    // Development server configuration
+    server: {
+        port: 3000,
+        headers: {
+            // Security headers for development
+            'X-Frame-Options': 'DENY',
+            'X-Content-Type-Options': 'nosniff',
+            'X-XSS-Protection': '1; mode=block',
+            'Referrer-Policy': 'strict-origin-when-cross-origin',
+            'Permissions-Policy': 'accelerometer=(), camera=(), geolocation=(), microphone=()',
+        },
     },
-  },
-
-  preview: {
-    port: 3000,
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
+    
+    // Optimize dependencies
+    optimizeDeps: {
+        include: ['react', 'react-dom', 'zustand'],
     },
-  },
-
-  // Worker configuration for WASM Web Workers
-  worker: {
-    format: 'es',
-    plugins: () => [],
-  },
 });

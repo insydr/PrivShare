@@ -99,12 +99,25 @@ app.use(helmet({
             connectSrc: ["'self'", 'ws:', 'wss:', CLIENT_URL],
             fontSrc: ["'self'"],
             objectSrc: ["'none'"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
             frameAncestors: ["'none'"],
+            frameSrc: ["'none'"],
+            upgradeInsecureRequests: [],
         },
     },
     crossOriginEmbedderPolicy: true,
     crossOriginOpenerPolicy: true,
     crossOriginResourcePolicy: { policy: 'same-origin' },
+    hsts: {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true,
+    },
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    xssFilter: true,
+    noSniff: true,
+    frameguard: { action: 'deny' },
 }));
 
 // CORS
