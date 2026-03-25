@@ -231,6 +231,49 @@ body {
     min-height: 0;
 }
 
+/* Editor with Sidebar Layout */
+.editor-container.with-sidebar {
+    flex-direction: row;
+    gap: var(--spacing-lg);
+}
+
+.editor-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    min-width: 0;
+    min-height: 0;
+}
+
+.editor-sidebar {
+    width: 380px;
+    flex-shrink: 0;
+    max-height: calc(100vh - 180px);
+    overflow-y: auto;
+}
+
+/* Toggle Sidebar Button */
+.toggle-sidebar-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    background-color: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.toggle-sidebar-btn:hover {
+    background-color: var(--color-border);
+    color: var(--color-text-primary);
+}
+
 /* Action Bar */
 .action-bar {
     display: flex;
@@ -400,5 +443,26 @@ body {
     .document-info {
         width: 100%;
         order: -1;
+    }
+    
+    /* Sidebar responsive */
+    .editor-container.with-sidebar {
+        flex-direction: column;
+    }
+    
+    .editor-sidebar {
+        width: 100%;
+        max-height: 400px;
+    }
+}
+
+@media (max-width: 1024px) {
+    .editor-container.with-sidebar {
+        flex-direction: column;
+    }
+    
+    .editor-sidebar {
+        width: 100%;
+        max-height: 500px;
     }
 }

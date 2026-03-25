@@ -61,6 +61,16 @@ export interface ProcessingState {
     message: string;
 }
 
+export interface TextRegionStore {
+    id: string;
+    text: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    confidence: number;
+}
+
 export interface CollaborationState {
     connectionState: ConnectionState;
     roomId: string | null;

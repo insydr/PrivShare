@@ -1,7 +1,7 @@
 /**
  * PrivShare Client Application
  * ============================
- * 
+ *
  * Zero-Trust Document Redaction Platform
  * - All processing happens locally via WebAssembly
  * - Files never leave the client device
@@ -9,10 +9,10 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { DocumentViewer } from './components';
+import { DocumentViewer, AnalysisPanel } from './components';
 import { useWasmProcessor } from './hooks';
 import { useDocumentStore } from './store/documentStore';
-import type { Box } from './types';
+
 import './styles/index.css';
 
 function App() {
@@ -22,14 +22,12 @@ function App() {
         error: wasmError,
         moduleInfo,
         loadImage,
-        redactMultiple,
-        getHash,
+        // redactMultiple and getHash are used by DocumentViewer component
     } = useWasmProcessor({ autoInit: true, debug: true });
 
     const {
         document,
         imageData,
-        currentBuffer,
         processing,
         setDocument,
         setImageData,
@@ -41,6 +39,7 @@ function App() {
     } = useDocumentStore();
 
     const [isDragOver, setIsDragOver] = useState(false);
+    const [showSidebar, setShowSidebar] = useState(true);
 
     // Update store when WASM is ready
     useEffect(() => {
@@ -104,9 +103,9 @@ function App() {
 
             // Load image using WASM (runs in worker, non-blocking)
             setProcessing({ stage: 'processing', progress: 30, message: 'Processing with WASM...' });
-            
+
             const result = await loadImage(file);
-            
+
             console.log('[App] Image loaded:', result.dimensions);
             console.log('[App] Hash:', result.hash);
 
@@ -130,20 +129,23 @@ function App() {
             // Update store
             setDocument(doc);
             setImageData(result.imageData);
-            
+
             // Store original buffer for later redaction
             const buffer = await file.arrayBuffer();
             setCurrentBuffer(buffer);
 
             setProcessing({ stage: 'idle', progress: 100, message: 'Ready' });
 
+            // Show sidebar when document is loaded
+            setShowSidebar(true);
+
             console.log('[App] Document ready for editing');
         } catch (error) {
             console.error('[App] Failed to process file:', error);
-            setProcessing({ 
-                stage: 'error', 
-                progress: 0, 
-                message: error instanceof Error ? error.message : 'Failed to process file' 
+            setProcessing({
+                stage: 'error',
+                progress: 0,
+                message: error instanceof Error ? error.message : 'Failed to process file'
             });
         }
     }, [isReady, loadImage, setDocument, setImageData, setCurrentBuffer, setProcessing]);
@@ -197,6 +199,18 @@ function App() {
                         {loadingState === 'error' && 'WASM Error'}
                         {loadingState === 'idle' && 'Initializing...'}
                     </span>
+                    {imageData && (
+                        <button
+                            className="toggle-sidebar-btn"
+                            onClick={() => setShowSidebar(!showSidebar)}
+                            title={showSidebar ? 'Hide Analysis Panel' : 'Show Analysis Panel'}
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                <line x1="9" y1="3" x2="9" y2="21"/>
+                            </svg>
+                        </button>
+                    )}
                 </nav>
             </header>
 
@@ -204,7 +218,7 @@ function App() {
             <main className="main-content">
                 {!imageData ? (
                     // Drop Zone (when no document)
-                    <div 
+                    <div
                         className={`drop-zone ${isDragOver ? 'active' : ''}`}
                         onDragOver={handleDragOver}
                         onDragLeave={handleDragLeave}
@@ -220,7 +234,7 @@ function App() {
                             <h2>Drop your document here</h2>
                             <p>PNG, JPEG, TIFF, BMP, WebP files supported</p>
                             <p className="size-limit">Maximum file size: 50MB</p>
-                            
+
                             <div className="security-notice">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                     <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
@@ -228,9 +242,9 @@ function App() {
                                 </svg>
                                 <span>Your file is processed locally and never uploaded to any server</span>
                             </div>
-                            
-                            <input 
-                                type="file" 
+
+                            <input
+                                type="file"
                                 id="file-input"
                                 accept=".png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp"
                                 onChange={handleFileInputChange}
@@ -243,31 +257,45 @@ function App() {
                         </div>
                     </div>
                 ) : (
-                    // Document Viewer (when document loaded)
-                    <div className="editor-container">
-                        <DocumentViewer />
-                        
-                        {/* Action Bar */}
-                        <div className="action-bar">
-                            <button 
-                                className="action-btn secondary"
-                                onClick={handleClearDocument}
-                            >
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <path d="M19 12H5M12 19l-7-7 7-7"/>
-                                </svg>
-                                New Document
-                            </button>
-                            
-                            <div className="document-info">
-                                <span className="doc-name">{document?.name}</span>
-                                {document?.originalHash && (
-                                    <span className="doc-hash" title={`SHA-256: ${document.originalHash}`}>
-                                        Hash: {document.originalHash.substring(0, 12)}...
-                                    </span>
-                                )}
+                    // Document Editor (when document loaded)
+                    <div className={`editor-container ${showSidebar ? 'with-sidebar' : ''}`}>
+                        {/* Main Editor */}
+                        <div className="editor-main">
+                            <DocumentViewer />
+
+                            {/* Action Bar */}
+                            <div className="action-bar">
+                                <button
+                                    className="action-btn secondary"
+                                    onClick={handleClearDocument}
+                                >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <path d="M19 12H5M12 19l-7-7 7-7"/>
+                                    </svg>
+                                    New Document
+                                </button>
+
+                                <div className="document-info">
+                                    <span className="doc-name">{document?.name}</span>
+                                    {document?.originalHash && (
+                                        <span className="doc-hash" title={`SHA-256: ${document.originalHash}`}>
+                                            Hash: {document.originalHash.substring(0, 12)}...
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                         </div>
+
+                        {/* Analysis Sidebar */}
+                        {showSidebar && (
+                            <div className="editor-sidebar">
+                                <AnalysisPanel
+                                    onAnalysisComplete={(result) => {
+                                        console.log('[App] Analysis complete:', result.piiCount, 'PII items found');
+                                    }}
+                                />
+                            </div>
+                        )}
                     </div>
                 )}
             </main>
