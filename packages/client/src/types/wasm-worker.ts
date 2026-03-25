@@ -96,7 +96,7 @@ export interface LoadImageResult {
  * Result of redaction operation
  */
 export interface RedactResult {
-    imageData: ImageData;
+    pngBuffer: ArrayBuffer;
     redactedPixels: number;
     hash: string;
 }

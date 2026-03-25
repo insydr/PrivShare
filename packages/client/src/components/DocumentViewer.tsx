@@ -3,14 +3,14 @@
  * ========================
  * 
  * Dual-layer canvas system for document viewing and redaction:
- * - Layer 1 (Bottom): Renders the original image/document
+ * - Layer 1 (Bottom): Renders the original/burned image/document
  * - Layer 2 (Top): Transparent canvas for drawing redaction rectangles
  * 
  * Features:
  * - Responsive resizing with aspect ratio preservation
  * - Mouse event handlers for drawing redaction boxes
- * - Zoom and pan support
- * - Selection and manipulation of existing redactions
+ * - WASM-powered redaction processing (non-blocking via Web Worker)
+ * - Download functionality for redacted documents
  */
 
 import React, {
@@ -20,9 +20,11 @@ import React, {
     useCallback,
     useMemo,
 } from 'react';
-import type { Point, Rect, RedactionBox, RedactionTool, CanvasMouseEvent } from '../types/canvas';
+import type { Point, Rect, RedactionBox, RedactionTool } from '../types/canvas';
 import { generateRedactionId, pointInRect } from '../types/canvas';
+import type { Box } from '../types/wasm-worker';
 import { useDocumentStore } from '../store/documentStore';
+import { useWasmProcessor } from '../hooks/useWasmProcessor';
 import './DocumentViewer.css';
 
 // ============================================
@@ -58,15 +60,29 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         currentBuffer,
         processing,
         zoom,
-        showRedactionPreview,
         selectedRedaction,
         setZoom,
         addRedaction,
         removeRedaction,
-        updateRedaction,
         setSelectedRedaction,
+        setProcessing,
+        setImageData,
+        setCurrentBuffer,
         setPreviewBuffer,
+        clearDocument,
     } = useDocumentStore();
+
+    // ============================================
+    // WASM PROCESSOR HOOK
+    // ============================================
+
+    const {
+        isReady: wasmReady,
+        loadingState: wasmLoadingState,
+        error: wasmError,
+        redactMultiple,
+        getHash,
+    } = useWasmProcessor({ autoInit: true, debug: true });
 
     // ============================================
     // LOCAL STATE
@@ -78,6 +94,8 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
     const [currentRect, setCurrentRect] = useState<Rect | null>(null);
     const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
     const [scale, setScale] = useState(1);
+    const [isProcessed, setIsProcessed] = useState(false);
+    const [redactedBuffer, setRedactedBuffer] = useState<ArrayBuffer | null>(null);
 
     // ============================================
     // REFS
@@ -86,15 +104,14 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
     const containerRef = useRef<HTMLDivElement>(null);
     const imageCanvasRef = useRef<HTMLCanvasElement>(null);
     const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
-    const imageRef = useRef<HTMLImageElement | null>(null);
 
     // ============================================
     // DERIVED VALUES
     // ============================================
 
     const redactionBoxes = useMemo(() => document?.redactions ?? [], [document?.redactions]);
-
     const hasDocument = imageData !== null;
+    const isProcessing = processing.stage !== 'idle' && processing.stage !== 'error';
 
     // ============================================
     // CANVAS SETUP & RESIZE
@@ -107,7 +124,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         if (!containerRef.current || !imageData) return;
 
         const container = containerRef.current;
-        const containerWidth = container.clientWidth - 40; // Padding
+        const containerWidth = container.clientWidth - 40;
         const containerHeight = container.clientHeight - 40;
 
         const imageAspect = imageData.width / imageData.height;
@@ -117,11 +134,9 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         let canvasHeight: number;
 
         if (imageAspect > containerAspect) {
-            // Image is wider than container
             canvasWidth = containerWidth;
             canvasHeight = containerWidth / imageAspect;
         } else {
-            // Image is taller than container
             canvasHeight = containerHeight;
             canvasWidth = containerHeight * imageAspect;
         }
@@ -143,7 +158,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         });
 
         resizeObserver.observe(containerRef.current);
-
         return () => resizeObserver.disconnect();
     }, [calculateCanvasDimensions]);
 
@@ -189,11 +203,37 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
         // Draw scaled image
         ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
 
-        // Store reference for preview
-        imageRef.current = new Image();
-        imageRef.current.src = tempCanvas.toDataURL();
-
     }, [imageData, canvasSize]);
+
+    // ============================================
+    // RENDER BURNED IMAGE FROM WASM
+    // ============================================
+
+    /**
+     * Render burned/redacted image after WASM processing
+     */
+    useEffect(() => {
+        if (!redactedBuffer || !imageCanvasRef.current) return;
+
+        const canvas = imageCanvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Create image from redacted PNG buffer
+        const blob = new Blob([redactedBuffer], { type: 'image/png' });
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+
+        img.onload = () => {
+            // Clear and draw redacted image
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            URL.revokeObjectURL(url);
+        };
+
+        img.src = url;
+
+    }, [redactedBuffer, canvasSize]);
 
     // ============================================
     // OVERLAY RENDERING (LAYER 2)
@@ -215,6 +255,9 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
 
         // Clear overlay
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Don't show overlay boxes if already processed
+        if (isProcessed) return;
 
         // Draw existing redaction boxes
         redactionBoxes.forEach((box) => {
@@ -267,7 +310,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
             ctx.setLineDash([]);
         }
 
-    }, [redactionBoxes, currentRect, isDrawing, scale, canvasSize, selectedRedaction]);
+    }, [redactionBoxes, currentRect, isDrawing, scale, canvasSize, selectedRedaction, isProcessed]);
 
     // ============================================
     // MOUSE EVENT HANDLERS
@@ -291,12 +334,11 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
      * Handle mouse down - start drawing or select existing box
      */
     const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (!hasDocument) return;
+        if (!hasDocument || isProcessed || isProcessing) return;
 
         const point = getCanvasCoordinates(e);
 
         if (currentTool === 'select' || currentTool === 'erase') {
-            // Find clicked box (reverse order to get top-most first)
             const clickedBox = [...redactionBoxes].reverse().find((box) =>
                 pointInRect(point, {
                     x: box.x,
@@ -316,13 +358,12 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                 setSelectedRedaction(null);
             }
         } else if (currentTool === 'draw') {
-            // Start drawing new box
             setIsDrawing(true);
             setDrawStart(point);
             setCurrentRect({ x: point.x, y: point.y, width: 0, height: 0 });
             setSelectedRedaction(null);
         }
-    }, [hasDocument, getCanvasCoordinates, currentTool, redactionBoxes, removeRedaction, setSelectedRedaction]);
+    }, [hasDocument, isProcessed, isProcessing, getCanvasCoordinates, currentTool, redactionBoxes, removeRedaction, setSelectedRedaction]);
 
     /**
      * Handle mouse move - update drawing preview
@@ -332,7 +373,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
 
         const point = getCanvasCoordinates(e);
 
-        // Calculate rectangle (handle negative dimensions)
         const x = Math.min(drawStart.x, point.x);
         const y = Math.min(drawStart.y, point.y);
         const width = Math.abs(point.x - drawStart.x);
@@ -352,7 +392,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
             return;
         }
 
-        // Only create box if it meets minimum size
         if (currentRect.width >= MIN_BOX_SIZE && currentRect.height >= MIN_BOX_SIZE) {
             const newBox: RedactionBox = {
                 id: generateRedactionId(),
@@ -386,34 +425,205 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
     }, [isDrawing]);
 
     // ============================================
+    // WASM PROCESSING - PROCESS BUTTON
+    // ============================================
+
+    /**
+     * Process redactions - send to WASM worker
+     */
+    const handleProcess = useCallback(async () => {
+        if (!currentBuffer || !document || !wasmReady) {
+            console.error('[DocumentViewer] Cannot process: missing buffer or WASM not ready');
+            return;
+        }
+
+        if (redactionBoxes.length === 0) {
+            alert('No redactions to apply. Draw redaction boxes first.');
+            return;
+        }
+
+        setProcessing({ stage: 'redacting', progress: 0, message: 'Preparing redactions...' });
+
+        try {
+            console.log('[DocumentViewer] Processing', redactionBoxes.length, 'redactions...');
+
+            // Convert redaction boxes to Box format for WASM
+            const boxes: Box[] = redactionBoxes.map((r) => ({
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+                pageIndex: r.pageIndex,
+            }));
+
+            setProcessing({ stage: 'redacting', progress: 30, message: 'Burning redactions...' });
+
+            // Call WASM worker to apply redactions (non-blocking)
+            const result = await redactMultiple(currentBuffer, boxes);
+
+            setProcessing({ stage: 'redacting', progress: 70, message: 'Generating hash...' });
+
+            // Get hash of redacted file for audit trail
+            const redactedHash = await getHash(result.pngBuffer);
+
+            setProcessing({ stage: 'redacting', progress: 90, message: 'Finalizing...' });
+
+            // Update state with redacted image
+            setRedactedBuffer(result.pngBuffer);
+            setIsProcessed(true);
+
+            // Update document with redacted hash
+            document.redactedHash = redactedHash;
+
+            console.log('[DocumentViewer] Redaction complete!');
+            console.log('[DocumentViewer] Pixels burned:', result.redactedPixels);
+            console.log('[DocumentViewer] Redacted hash:', redactedHash);
+
+            setProcessing({ stage: 'idle', progress: 100, message: 'Redaction complete!' });
+
+            // Clear processing state after a delay
+            setTimeout(() => {
+                setProcessing({ stage: 'idle', progress: 0, message: '' });
+            }, 2000);
+
+        } catch (error) {
+            console.error('[DocumentViewer] Processing failed:', error);
+            setProcessing({
+                stage: 'error',
+                progress: 0,
+                message: error instanceof Error ? error.message : 'Processing failed',
+            });
+        }
+    }, [currentBuffer, document, wasmReady, redactionBoxes, redactMultiple, getHash, setProcessing]);
+
+    // ============================================
+    // DOWNLOAD FUNCTIONALITY
+    // ============================================
+
+    /**
+     * Download the redacted document
+     */
+    const handleDownload = useCallback(() => {
+        if (!redactedBuffer && !currentBuffer) {
+            console.error('[DocumentViewer] No buffer to download');
+            return;
+        }
+
+        // Use redacted buffer if available, otherwise original
+        const bufferToDownload = redactedBuffer || currentBuffer;
+        const isRedacted = !!redactedBuffer;
+
+        // Create blob from buffer
+        const blob = new Blob([bufferToDownload], { type: 'image/png' });
+        const url = URL.createObjectURL(blob);
+
+        // Generate filename
+        const originalName = document?.name || 'document';
+        const baseName = originalName.replace(/\.[^.]+$/, '');
+        const fileName = isRedacted 
+            ? `${baseName}_redacted.png`
+            : `${baseName}_original.png`;
+
+        // Trigger download
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        // Cleanup
+        URL.revokeObjectURL(url);
+
+        console.log('[DocumentViewer] Downloaded:', fileName);
+    }, [redactedBuffer, currentBuffer, document]);
+
+    /**
+     * Download audit report (hashes)
+     */
+    const handleDownloadAudit = useCallback(() => {
+        if (!document) return;
+
+        const auditInfo = {
+            fileName: document.name,
+            originalHash: document.originalHash,
+            redactedHash: document.redactedHash,
+            redactionCount: document.redactions.length,
+            processedAt: new Date().toISOString(),
+            redactions: document.redactions.map((r) => ({
+                x: r.x,
+                y: r.y,
+                width: r.width,
+                height: r.height,
+                type: r.type,
+            })),
+        };
+
+        const blob = new Blob([JSON.stringify(auditInfo, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${document.name.replace(/\.[^.]+$/, '')}_audit.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        URL.revokeObjectURL(url);
+        console.log('[DocumentViewer] Audit report downloaded');
+    }, [document]);
+
+    // ============================================
+    // RESET FUNCTIONALITY
+    // ============================================
+
+    /**
+     * Reset to original document (undo processing)
+     */
+    const handleReset = useCallback(() => {
+        if (!confirm('Reset to original document? This will clear all redactions.')) {
+            return;
+        }
+        
+        setIsProcessed(false);
+        setRedactedBuffer(null);
+        clearDocument();
+    }, [clearDocument]);
+
+    // ============================================
     // KEYBOARD SHORTCUTS
     // ============================================
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            // Delete selected redaction
             if ((e.key === 'Delete' || e.key === 'Backspace') && selectedRedaction) {
                 removeRedaction(selectedRedaction);
                 setSelectedRedaction(null);
             }
 
-            // Tool shortcuts
             if (e.key === 'd' || e.key === 'D') setCurrentTool('draw');
             if (e.key === 's' || e.key === 'S') setCurrentTool('select');
             if (e.key === 'e' || e.key === 'E') setCurrentTool('erase');
 
-            // Zoom shortcuts
             if (e.key === '+' || e.key === '=') {
                 setZoom(Math.min(zoom + 0.1, 3));
             }
             if (e.key === '-') {
                 setZoom(Math.max(zoom - 0.1, 0.1));
             }
+
+            // Ctrl+P to process
+            if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+                e.preventDefault();
+                if (hasDocument && !isProcessed && redactionBoxes.length > 0) {
+                    handleProcess();
+                }
+            }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedRedaction, removeRedaction, setSelectedRedaction, zoom, setZoom]);
+    }, [selectedRedaction, removeRedaction, setSelectedRedaction, zoom, setZoom, hasDocument, isProcessed, redactionBoxes.length, handleProcess]);
 
     // ============================================
     // TOOLBAR ACTIONS
@@ -451,7 +661,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                         className={`tool-btn ${currentTool === 'draw' ? 'active' : ''}`}
                         onClick={() => setCurrentTool('draw')}
                         title="Draw Redaction (D)"
-                        disabled={!hasDocument}
+                        disabled={!hasDocument || isProcessed || isProcessing}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -462,7 +672,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                         className={`tool-btn ${currentTool === 'select' ? 'active' : ''}`}
                         onClick={() => setCurrentTool('select')}
                         title="Select (S)"
-                        disabled={!hasDocument}
+                        disabled={!hasDocument || isProcessed || isProcessing}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
@@ -473,7 +683,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                         className={`tool-btn ${currentTool === 'erase' ? 'active' : ''}`}
                         onClick={() => setCurrentTool('erase')}
                         title="Erase (E)"
-                        disabled={!hasDocument}
+                        disabled={!hasDocument || isProcessed || isProcessing}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M20 5H9l-7 7 7 7h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Z" />
@@ -527,25 +737,97 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
 
                 <div className="tool-separator" />
 
+                {/* Process & Download Buttons */}
+                <div className="tool-group action-buttons">
+                    {!isProcessed ? (
+                        <button
+                            className="tool-btn primary"
+                            onClick={handleProcess}
+                            title="Process Redactions (Ctrl+P)"
+                            disabled={!hasDocument || redactionBoxes.length === 0 || isProcessing || !wasmReady}
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <polygon points="5 3 19 12 5 21 5 3" />
+                            </svg>
+                            <span>Process</span>
+                        </button>
+                    ) : (
+                        <button
+                            className="tool-btn success"
+                            onClick={handleReset}
+                            title="Reset to Original"
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <polyline points="1 4 1 10 7 10" />
+                                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                            </svg>
+                            <span>Reset</span>
+                        </button>
+                    )}
+
+                    <button
+                        className="tool-btn download"
+                        onClick={handleDownload}
+                        title="Download Document"
+                        disabled={!hasDocument}
+                    >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                        <span>{isProcessed ? 'Download' : 'Download Original'}</span>
+                    </button>
+
+                    {isProcessed && (
+                        <button
+                            className="tool-btn audit"
+                            onClick={handleDownloadAudit}
+                            title="Download Audit Report"
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                                <polyline points="14 2 14 8 20 8" />
+                                <line x1="16" y1="13" x2="8" y2="13" />
+                                <line x1="16" y1="17" x2="8" y2="17" />
+                            </svg>
+                            <span>Audit</span>
+                        </button>
+                    )}
+                </div>
+
+                <div className="tool-separator" />
+
                 <div className="tool-group">
                     <button
                         className="tool-btn danger"
                         onClick={handleClearAll}
                         title="Clear All Redactions"
-                        disabled={redactionBoxes.length === 0}
+                        disabled={redactionBoxes.length === 0 || isProcessed}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <polyline points="3 6 5 6 21 6" />
                             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                         </svg>
-                        <span>Clear All</span>
+                        <span>Clear</span>
                     </button>
                 </div>
 
                 <div className="toolbar-info">
-                    {redactionBoxes.length > 0 && (
+                    {wasmReady && (
+                        <span className="wasm-status ready">WASM Ready</span>
+                    )}
+                    {!wasmReady && (
+                        <span className="wasm-status loading">Loading WASM...</span>
+                    )}
+                    {redactionBoxes.length > 0 && !isProcessed && (
                         <span className="redaction-count">
                             {redactionBoxes.length} redaction{redactionBoxes.length !== 1 ? 's' : ''}
+                        </span>
+                    )}
+                    {isProcessed && (
+                        <span className="processed-badge">
+                            ✓ Processed
                         </span>
                     )}
                 </div>
@@ -589,10 +871,32 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                             onMouseUp={handleMouseUp}
                             onMouseLeave={handleMouseLeave}
                             style={{
-                                cursor: currentTool === 'draw' ? 'crosshair' :
+                                cursor: isProcessing ? 'wait' :
+                                        isProcessed ? 'default' :
+                                        currentTool === 'draw' ? 'crosshair' :
                                         currentTool === 'erase' ? 'not-allowed' : 'default',
                             }}
                         />
+                    </div>
+                )}
+
+                {/* Loading Spinner Overlay */}
+                {isProcessing && (
+                    <div className="processing-overlay">
+                        <div className="processing-spinner">
+                            <div className="spinner-ring"></div>
+                            <div className="spinner-content">
+                                <span className="spinner-text">{processing.message}</span>
+                                {processing.progress > 0 && (
+                                    <div className="progress-bar">
+                                        <div 
+                                            className="progress-fill" 
+                                            style={{ width: `${processing.progress}%` }}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 )}
             </div>
@@ -603,19 +907,21 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className = '' }
                     <span className="file-info">
                         {document?.name} • {document?.width}×{document?.height}px
                     </span>
-                    {processing.stage !== 'idle' && (
-                        <span className="processing-status">
-                            {processing.message}
+                    {document?.originalHash && (
+                        <span className="hash-info" title={`SHA-256: ${document.originalHash}`}>
+                            Original: {document.originalHash.substring(0, 12)}...
                         </span>
                     )}
-                    {currentTool === 'draw' && (
+                    {document?.redactedHash && (
+                        <span className="hash-info redacted" title={`SHA-256: ${document.redactedHash}`}>
+                            Redacted: {document.redactedHash.substring(0, 12)}...
+                        </span>
+                    )}
+                    {!isProcessed && currentTool === 'draw' && (
                         <span className="hint">Click and drag to draw redaction box</span>
                     )}
-                    {currentTool === 'select' && (
-                        <span className="hint">Click to select, Delete to remove</span>
-                    )}
-                    {currentTool === 'erase' && (
-                        <span className="hint">Click on redaction to remove</span>
+                    {isProcessed && (
+                        <span className="hint success">Document redacted. Click Download to save.</span>
                     )}
                 </div>
             )}

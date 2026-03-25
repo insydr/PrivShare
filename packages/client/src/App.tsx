@@ -130,7 +130,10 @@ function App() {
             // Update store
             setDocument(doc);
             setImageData(result.imageData);
-            setCurrentBuffer(await file.arrayBuffer());
+            
+            // Store original buffer for later redaction
+            const buffer = await file.arrayBuffer();
+            setCurrentBuffer(buffer);
 
             setProcessing({ stage: 'idle', progress: 100, message: 'Ready' });
 
@@ -155,67 +158,6 @@ function App() {
             handleFileSelect(file);
         }
     }, [handleFileSelect]);
-
-    // ============================================
-    // EXPORT HANDLER
-    // ============================================
-
-    const handleExport = useCallback(async () => {
-        if (!currentBuffer || !document) return;
-
-        const redactions = document.redactions;
-        if (redactions.length === 0) {
-            alert('No redactions to apply. Draw redaction boxes first.');
-            return;
-        }
-
-        setProcessing({ stage: 'redacting', progress: 50, message: 'Applying redactions...' });
-
-        try {
-            // Convert redactions to Box format
-            const boxes: Box[] = redactions.map(r => ({
-                x: r.x,
-                y: r.y,
-                width: r.width,
-                height: r.height,
-                pageIndex: r.pageIndex,
-            }));
-
-            // Apply redactions via WASM
-            const result = await redactMultiple(currentBuffer, boxes);
-            
-            // Get hash of redacted file
-            const redactedHash = await getHash(result.pngBuffer);
-
-            console.log('[App] Redactions applied:', result.redactedPixels, 'pixels burned');
-            console.log('[App] Redacted hash:', redactedHash);
-
-            // Download the redacted file
-            const blob = new Blob([result.pngBuffer], { type: 'image/png' });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = document.name.replace(/\.[^.]+$/, '_redacted.png');
-            link.click();
-            URL.revokeObjectURL(url);
-
-            setProcessing({ stage: 'idle', progress: 100, message: 'Export complete!' });
-
-            // Update document with redacted hash
-            setDocument({
-                ...document,
-                redactedHash,
-            });
-
-        } catch (error) {
-            console.error('[App] Failed to export:', error);
-            setProcessing({ 
-                stage: 'error', 
-                progress: 0, 
-                message: error instanceof Error ? error.message : 'Failed to export' 
-            });
-        }
-    }, [currentBuffer, document, redactMultiple, getHash, setProcessing, setDocument]);
 
     // ============================================
     // CLEAR DOCUMENT
@@ -319,23 +261,12 @@ function App() {
                             
                             <div className="document-info">
                                 <span className="doc-name">{document?.name}</span>
-                                <span className="doc-hash" title={`SHA-256: ${document?.originalHash}`}>
-                                    Hash: {document?.originalHash?.substring(0, 12)}...
-                                </span>
+                                {document?.originalHash && (
+                                    <span className="doc-hash" title={`SHA-256: ${document.originalHash}`}>
+                                        Hash: {document.originalHash.substring(0, 12)}...
+                                    </span>
+                                )}
                             </div>
-                            
-                            <button 
-                                className="action-btn primary"
-                                onClick={handleExport}
-                                disabled={!document?.redactions?.length || processing.stage === 'redacting'}
-                            >
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                                    <polyline points="7 10 12 15 17 10"/>
-                                    <line x1="12" y1="15" x2="12" y2="3"/>
-                                </svg>
-                                {processing.stage === 'redacting' ? 'Processing...' : 'Apply & Export'}
-                            </button>
                         </div>
                     </div>
                 )}
