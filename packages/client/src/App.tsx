@@ -9,11 +9,41 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
+import { Routes, Route, useParams, useNavigate } from 'react-router-dom';
 import { DocumentViewer, AnalysisPanel } from './components';
 import { useWasmProcessor, usePdfProcessor } from './hooks';
 import { useDocumentStore } from './store/documentStore';
+import { useAuthStore } from './store/authStore';
+import { AuthModal } from './components/AuthModal';
+import { UserMenu } from './components/UserMenu';
+import { ShareModal } from './components/ShareModal';
+import { JoinShare } from './components/JoinShare';
 
 import './styles/index.css';
+
+// Join Share Page Component
+const JoinSharePage = () => {
+  const { code } = useParams<{ code: string }>();
+  const navigate = useNavigate();
+
+  const handleSuccess = () => {
+    // After successfully accessing a share, navigate to home
+    // The document data will be loaded into the store
+    navigate('/');
+  };
+
+  if (!code) {
+    return (
+      <div className="error-page">
+        <h2>Invalid Share Code</h2>
+        <p>No share code provided in the URL.</p>
+        <button onClick={() => navigate('/')}>Go Home</button>
+      </div>
+    );
+  }
+
+  return <JoinShare code={code} onSuccess={handleSuccess} />;
+};
 
 function App() {
     const {
@@ -22,7 +52,6 @@ function App() {
         error: wasmError,
         moduleInfo,
         loadImage,
-        // redactMultiple and getHash are used by DocumentViewer component
     } = useWasmProcessor({ autoInit: true, debug: true });
 
     const {
@@ -35,6 +64,7 @@ function App() {
         document,
         imageData,
         processing,
+        finalizedDocument,
         setDocument,
         setImageData,
         setCurrentBuffer,
@@ -45,8 +75,20 @@ function App() {
         setCurrentPage,
     } = useDocumentStore();
 
+    const { isAuthenticated } = useAuthStore();
+
     const [isDragOver, setIsDragOver] = useState(false);
     const [showSidebar, setShowSidebar] = useState(true);
+    const [showAuthModal, setShowAuthModal] = useState(false);
+    const [showShareModal, setShowShareModal] = useState(false);
+    const [shareDocumentData, setShareDocumentData] = useState<{
+        name: string;
+        size: number;
+        hash: string;
+        encryptedKey: string;
+        keyIv: string;
+        thumbnailBase64?: string;
+    } | null>(null);
 
     // Update store when WASM is ready
     useEffect(() => {
@@ -56,37 +98,33 @@ function App() {
         }
     }, [isReady, wasmError, setWasmReady, setWasmError]);
 
-    // Handle page changes for multi-page PDFs - render pages on demand
+    // Handle page changes for multi-page PDFs
     useEffect(() => {
         const handlePageChange = async (e: Event) => {
             const customEvent = e as CustomEvent<{ page: number }>;
             const { page } = customEvent.detail;
-            
-            // Only handle if we have a PDF document
+
             if (!document?.isPdf) return;
-            
-            // Check if page is already rendered
+
             const { pageImageData } = useDocumentStore.getState();
             if (pageImageData.has(page)) {
-                // Page already rendered, just update the image data
                 return;
             }
-            
-            // Render the page
+
             console.log('[App] Rendering page', page + 1, 'on demand');
             setProcessing({ stage: 'rendering', progress: 0, message: `Rendering page ${page + 1}...` });
-            
-            const result = await renderPage(page + 1); // PDF pages are 1-indexed
-            
+
+            const result = await renderPage(page + 1);
+
             if (result) {
                 console.log('[App] Page', page + 1, 'rendered successfully');
             }
-            
+
             setProcessing({ stage: 'idle', progress: 100, message: '' });
         };
 
         window.addEventListener('page:change', handlePageChange);
-        
+
         return () => {
             window.removeEventListener('page:change', handlePageChange);
         };
@@ -125,17 +163,15 @@ function App() {
             return;
         }
 
-        // Validate file type
         const validImageTypes = ['image/png', 'image/jpeg', 'image/tiff', 'image/bmp', 'image/webp'];
         const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
         const isValidImage = validImageTypes.includes(file.type);
-        
+
         if (!isValidImage && !isPdf) {
             alert('Invalid file type. Please use PNG, JPEG, TIFF, BMP, WebP, or PDF.');
             return;
         }
 
-        // Validate file size (50MB max per PRD)
         const maxSize = 50 * 1024 * 1024;
         if (file.size > maxSize) {
             alert('File too large. Maximum size is 50MB.');
@@ -150,7 +186,6 @@ function App() {
             const buffer = await file.arrayBuffer();
 
             if (isPdf) {
-                // Handle PDF file
                 setProcessing({ stage: 'loading', progress: 20, message: 'Loading PDF document...' });
 
                 const pdfInfo = await loadPdf(buffer);
@@ -160,14 +195,12 @@ function App() {
 
                 console.log('[App] PDF loaded:', pdfInfo.pageCount, 'pages');
 
-                // Render the first page
                 setProcessing({ stage: 'rendering', progress: 50, message: 'Rendering first page...' });
                 const firstPage = await renderPage(1);
                 if (!firstPage) {
                     throw new Error('Failed to render first page');
                 }
 
-                // Create document record for multi-page PDF
                 const doc = {
                     id: `doc-${Date.now()}`,
                     name: file.name,
@@ -192,7 +225,6 @@ function App() {
                     isPdf: true,
                 };
 
-                // Update store
                 setDocument(doc);
                 setImageData(firstPage.imageData);
                 setCurrentBuffer(buffer);
@@ -203,7 +235,6 @@ function App() {
                 console.log('[App] PDF document ready for editing');
 
             } else {
-                // Handle image file (existing logic)
                 setProcessing({ stage: 'processing', progress: 30, message: 'Processing with WASM...' });
 
                 const result = await loadImage(file);
@@ -211,7 +242,6 @@ function App() {
                 console.log('[App] Image loaded:', result.dimensions);
                 console.log('[App] Hash:', result.hash);
 
-                // Create document record
                 const doc = {
                     id: `doc-${Date.now()}`,
                     name: file.name,
@@ -236,7 +266,6 @@ function App() {
                     isPdf: false,
                 };
 
-                // Update store
                 setDocument(doc);
                 setImageData(result.imageData);
                 setCurrentBuffer(buffer);
@@ -246,7 +275,6 @@ function App() {
                 console.log('[App] Document ready for editing');
             }
 
-            // Show sidebar when document is loaded
             setShowSidebar(true);
 
         } catch (error) {
@@ -259,20 +287,12 @@ function App() {
         }
     }, [isReady, loadImage, loadPdf, renderPage, setDocument, setImageData, setCurrentBuffer, setProcessing, setCurrentPage]);
 
-    // ============================================
-    // FILE INPUT HANDLER
-    // ============================================
-
     const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
             handleFileSelect(file);
         }
     }, [handleFileSelect]);
-
-    // ============================================
-    // CLEAR DOCUMENT
-    // ============================================
 
     const handleClearDocument = useCallback(() => {
         if (document && document.redactions.length > 0) {
@@ -285,10 +305,37 @@ function App() {
     }, [document, clearDocument, unloadPdf]);
 
     // ============================================
+    // SHARE HANDLING
+    // ============================================
+
+    const handleShare = useCallback(() => {
+        if (!finalizedDocument) {
+            alert('Please finalize your document first before sharing.');
+            return;
+        }
+
+        if (!isAuthenticated) {
+            setShowAuthModal(true);
+            return;
+        }
+
+        // Prepare document data for sharing
+        setShareDocumentData({
+            name: finalizedDocument.name,
+            size: finalizedDocument.size,
+            hash: finalizedDocument.redactedHash || finalizedDocument.originalHash,
+            encryptedKey: finalizedDocument.encryptedKey || '',
+            keyIv: finalizedDocument.keyIv || '',
+            thumbnailBase64: finalizedDocument.thumbnailBase64,
+        });
+        setShowShareModal(true);
+    }, [finalizedDocument, isAuthenticated]);
+
+    // ============================================
     // RENDER
     // ============================================
 
-    return (
+    const MainApp = () => (
         <div className="app">
             {/* Header */}
             <header className="app-header">
@@ -310,24 +357,44 @@ function App() {
                         {loadingState === 'idle' && 'Initializing...'}
                     </span>
                     {imageData && (
-                        <button
-                            className="toggle-sidebar-btn"
-                            onClick={() => setShowSidebar(!showSidebar)}
-                            title={showSidebar ? 'Hide Analysis Panel' : 'Show Analysis Panel'}
-                        >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                                <line x1="9" y1="3" x2="9" y2="21"/>
-                            </svg>
-                        </button>
+                        <>
+                            <button
+                                className="toggle-sidebar-btn"
+                                onClick={() => setShowSidebar(!showSidebar)}
+                                title={showSidebar ? 'Hide Analysis Panel' : 'Show Analysis Panel'}
+                            >
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                    <line x1="9" y1="3" x2="9" y2="21"/>
+                                </svg>
+                            </button>
+                            {finalizedDocument && (
+                                <button
+                                    className="share-header-btn"
+                                    onClick={handleShare}
+                                    title="Share Document"
+                                >
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <circle cx="18" cy="5" r="3"/>
+                                        <circle cx="6" cy="12" r="3"/>
+                                        <circle cx="18" cy="19" r="3"/>
+                                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                                        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                                    </svg>
+                                    Share
+                                </button>
+                            )}
+                        </>
                     )}
+                    <div className="auth-section">
+                        <UserMenu onLoginClick={() => setShowAuthModal(true)} />
+                    </div>
                 </nav>
             </header>
 
             {/* Main Content */}
             <main className="main-content">
                 {!imageData ? (
-                    // Drop Zone (when no document)
                     <div
                         className={`drop-zone ${isDragOver ? 'active' : ''}`}
                         onDragOver={handleDragOver}
@@ -367,13 +434,10 @@ function App() {
                         </div>
                     </div>
                 ) : (
-                    // Document Editor (when document loaded)
                     <div className={`editor-container ${showSidebar ? 'with-sidebar' : ''}`}>
-                        {/* Main Editor */}
                         <div className="editor-main">
-                            <DocumentViewer />
+                            <DocumentViewer enableCollaboration={isAuthenticated} />
 
-                            {/* Action Bar */}
                             <div className="action-bar">
                                 <button
                                     className="action-btn secondary"
@@ -393,10 +457,25 @@ function App() {
                                         </span>
                                     )}
                                 </div>
+
+                                {finalizedDocument && (
+                                    <button
+                                        className="action-btn primary"
+                                        onClick={handleShare}
+                                    >
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <circle cx="18" cy="5" r="3"/>
+                                            <circle cx="6" cy="12" r="3"/>
+                                            <circle cx="18" cy="19" r="3"/>
+                                            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                                            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                                        </svg>
+                                        Share Document
+                                    </button>
+                                )}
                             </div>
                         </div>
 
-                        {/* Analysis Sidebar */}
                         {showSidebar && (
                             <div className="editor-sidebar">
                                 <AnalysisPanel
@@ -440,7 +519,27 @@ function App() {
                     </div>
                 </div>
             )}
+
+            {/* Auth Modal */}
+            <AuthModal
+                isOpen={showAuthModal}
+                onClose={() => setShowAuthModal(false)}
+            />
+
+            {/* Share Modal */}
+            <ShareModal
+                isOpen={showShareModal}
+                onClose={() => setShowShareModal(false)}
+                documentData={shareDocumentData}
+            />
         </div>
+    );
+
+    return (
+        <Routes>
+            <Route path="/" element={<MainApp />} />
+            <Route path="/join/:code" element={<JoinSharePage />} />
+        </Routes>
     );
 }
 

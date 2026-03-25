@@ -196,6 +196,18 @@ app.use('/api/auth', authBetterRoutes);
 app.use('/api', sessionRoutes);
 app.use('/api/share', shareRoutes);
 
+// Health check endpoint
+app.get('/api/health', (_req, res) => {
+    res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        version: '1.0.0',
+        architecture: 'zero-trust',
+        fileUploads: 'DISABLED',
+    });
+});
+
 // Root endpoint
 app.get('/', (_req, res) => {
     res.json({

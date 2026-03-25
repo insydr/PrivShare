@@ -10,3 +10,7 @@ export { AnalysisPanel } from './AnalysisPanel';
 export { PolicyValidationModal } from './PolicyValidationModal';
 export { P2PTransferPanel } from './P2PTransferPanel';
 export { PageNavigation, PageThumbnailList } from './PageNavigation';
+export { AuthModal } from './AuthModal';
+export { UserMenu } from './UserMenu';
+export { ShareModal } from './ShareModal';
+export { JoinShare } from './JoinShare';

@@ -466,3 +466,68 @@ body {
         max-height: 500px;
     }
 }
+
+/* Share Button in Header */
+.share-header-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background-color: var(--color-primary);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.share-header-btn:hover {
+    background-color: var(--color-primary-hover);
+}
+
+/* Auth Section in Header */
+.auth-section {
+    display: flex;
+    align-items: center;
+    margin-left: var(--spacing-md);
+}
+
+/* Error Page */
+.error-page {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: var(--spacing-xl);
+    text-align: center;
+    background-color: var(--color-bg-primary);
+}
+
+.error-page h2 {
+    font-size: 1.5rem;
+    margin-bottom: var(--spacing-md);
+    color: var(--color-danger);
+}
+
+.error-page p {
+    color: var(--color-text-secondary);
+    margin-bottom: var(--spacing-lg);
+}
+
+.error-page button {
+    padding: var(--spacing-sm) var(--spacing-lg);
+    background-color: var(--color-primary);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.error-page button:hover {
+    background-color: var(--color-primary-hover);
+}

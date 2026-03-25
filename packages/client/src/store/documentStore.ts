@@ -13,12 +13,13 @@
  */
 
 import { create } from 'zustand';
-import type { Box, ImageInfo, TextRegion, PiiMatch } from '../types/wasm-worker';
+import type { TextRegion, PiiMatch } from '../types/wasm-worker';
 import type { 
     Collaborator, 
-    CursorPosition, 
+    CursorPosition,
     SyncedRedactionBox,
-    ConnectionState 
+    ConnectionState,
+    RedactionBox
 } from '../types/collaboration';
 import { mergeRedactions } from '../types/collaboration';
 
@@ -67,6 +68,19 @@ export interface Document {
     isPdf?: boolean;
 }
 
+export interface FinalizedDocument {
+    id: string;
+    name: string;
+    size: number;
+    originalHash: string;
+    redactedHash: string;
+    redactionCount: number;
+    finalizedAt: Date;
+    encryptedKey?: string;
+    keyIv?: string;
+    thumbnailBase64?: string;
+}
+
 export interface ProcessingState {
     stage: 'idle' | 'loading' | 'processing' | 'rendering' | 'redacting' | 'exporting' | 'error';
     progress: number;
@@ -98,6 +112,7 @@ interface DocumentState {
     imageData: ImageData | null;
     currentBuffer: ArrayBuffer | null;
     previewBuffer: ArrayBuffer | null;
+    finalizedDocument: FinalizedDocument | null;
     
     // Multi-page support
     pageImageData: Map<number, ImageData>;  // Page number -> ImageData
@@ -170,6 +185,10 @@ interface DocumentState {
     mergeRemoteRedactions: (remoteBoxes: SyncedRedactionBox[], remoteUserId: string) => void;
     replaceRedactions: (redactions: RedactionArea[]) => void;
     
+    // Actions - Finalized Document
+    setFinalizedDocument: (doc: FinalizedDocument | null) => void;
+    clearFinalizedDocument: () => void;
+    
     // Actions - Reset
     clearDocument: () => void;
     reset: () => void;
@@ -193,6 +212,7 @@ const initialState = {
     imageData: null,
     currentBuffer: null,
     previewBuffer: null,
+    finalizedDocument: null,
     pageImageData: new Map<number, ImageData>(),
     pdfBuffer: null,
     renderedPages: new Set<number>(),
@@ -526,30 +546,51 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         if (!state.document) return state;
 
         const currentUserId = state.collaboration.currentUserId || 'local';
-        
-        // Convert local redactions to synced format
-        const localBoxes: SyncedRedactionBox[] = state.document.redactions.map(r => ({
-            ...r,
-            userId: r.userId || currentUserId,
-            timestamp: r.createdAt || 0,
+
+        // Convert RedactionArea[] to RedactionBox[] for the merge function
+        const localBoxes: RedactionBox[] = state.document.redactions.map(r => ({
+            id: r.id,
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+            type: r.type,
+            pageIndex: r.pageIndex,
+            piiType: r.piiType,
+            confidence: r.confidence,
+            createdAt: r.createdAt || Date.now(),
         }));
 
         // Merge with last-write-wins conflict resolution
         const merged = mergeRedactions(
-            state.document.redactions,
+            localBoxes,
             remoteBoxes,
             currentUserId
         );
 
+        // Convert back to RedactionArea[]
+        const mergedAreas: RedactionArea[] = merged.map(box => ({
+            id: box.id,
+            x: box.x,
+            y: box.y,
+            width: box.width,
+            height: box.height,
+            pageIndex: box.pageIndex,
+            type: box.type,
+            piiType: box.piiType,
+            confidence: box.confidence,
+            createdAt: box.createdAt,
+        }));
+
         console.log('[DocumentStore] Merged remote redactions from:', remoteUserId, 
             'Local:', state.document.redactions.length, 
             'Remote:', remoteBoxes.length, 
-            'Merged:', merged.length);
+            'Merged:', mergedAreas.length);
 
         return {
             document: {
                 ...state.document,
-                redactions: merged,
+                redactions: mergedAreas,
             },
         };
     }),
@@ -561,6 +602,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     })),
 
     // ============================================
+    // FINALIZED DOCUMENT ACTIONS
+    // ============================================
+
+    setFinalizedDocument: (doc) => set({ finalizedDocument: doc }),
+
+    clearFinalizedDocument: () => set({ finalizedDocument: null }),
+
+    // ============================================
     // RESET ACTIONS
     // ============================================
 
@@ -569,6 +618,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         imageData: null,
         currentBuffer: null,
         previewBuffer: null,
+        finalizedDocument: null,
         pageImageData: new Map(),
         pdfBuffer: null,
         renderedPages: new Set(),
@@ -607,3 +657,4 @@ export const selectCurrentPage = (state: DocumentState) => state.currentPage;
 export const selectPageCount = (state: DocumentState) => state.document?.pageCount ?? 1;
 export const selectPageInfo = (state: DocumentState, pageNumber: number) => 
     state.document?.pages.find(p => p.pageNumber === pageNumber);
+export const selectFinalizedDocument = (state: DocumentState) => state.finalizedDocument;

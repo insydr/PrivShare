@@ -8,6 +8,9 @@
 
 import type { RedactionBox } from './canvas';
 
+// Re-export RedactionBox for convenience
+export type { RedactionBox } from './canvas';
+
 // ============================================
 // USER TYPES
 // ============================================
