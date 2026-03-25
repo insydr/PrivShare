@@ -1,0 +1,324 @@
+/**
+ * PageNavigation Component Styles
+ * ==================================
+ */
+
+/* ============================================
+   PAGE NAVIGATION CONTAINER
+   ============================================ */
+
+.page-navigation {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+    outline: none;
+}
+
+.page-navigation:focus {
+    box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+}
+
+/* ============================================
+   NAVIGATION BUTTONS
+   ============================================ */
+
+.page-nav-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background: white;
+    color: #495057;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.page-nav-btn:hover:not(:disabled) {
+    background: #4F46E5;
+    border-color: #4F46E5;
+    color: white;
+}
+
+.page-nav-btn:active:not(:disabled) {
+    transform: scale(0.95);
+}
+
+.page-nav-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: #f8f9fa;
+}
+
+/* ============================================
+   PAGE INPUT
+   ============================================ */
+
+.page-input-container {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.page-input {
+    width: 48px;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    text-align: center;
+    font-size: 14px;
+    font-weight: 500;
+    color: #212529;
+    background: white;
+    -moz-appearance: textfield;
+}
+
+.page-input::-webkit-outer-spin-button,
+.page-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.page-input:focus {
+    outline: none;
+    border-color: #4F46E5;
+    box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+}
+
+.page-separator {
+    color: #6c757d;
+    font-size: 14px;
+}
+
+.page-total {
+    color: #495057;
+    font-size: 14px;
+    font-weight: 500;
+    min-width: 24px;
+}
+
+/* ============================================
+   PAGE INFO
+   ============================================ */
+
+.page-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: 8px;
+    padding-left: 12px;
+    border-left: 1px solid #dee2e6;
+}
+
+.page-dimensions {
+    font-size: 12px;
+    color: #6c757d;
+}
+
+.page-redactions {
+    font-size: 12px;
+    color: #dc3545;
+    font-weight: 500;
+}
+
+.page-rendered {
+    color: #28a745;
+    font-size: 14px;
+}
+
+/* ============================================
+   PAGE THUMBNAILS (INLINE)
+   ============================================ */
+
+.page-thumbnails {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    padding-left: 12px;
+    border-left: 1px solid #dee2e6;
+}
+
+.page-thumbnail {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: white;
+    color: #495057;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.page-thumbnail:hover {
+    border-color: #4F46E5;
+    color: #4F46E5;
+}
+
+.page-thumbnail.active {
+    background: #4F46E5;
+    border-color: #4F46E5;
+    color: white;
+}
+
+.page-thumbnail.rendered {
+    position: relative;
+}
+
+.page-thumbnail.rendered::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 4px;
+    height: 4px;
+    background: #28a745;
+    border-radius: 50%;
+}
+
+/* ============================================
+   PAGE THUMBNAIL LIST (SIDEBAR)
+   ============================================ */
+
+.page-thumbnail-list {
+    display: flex;
+    flex-direction: column;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+    overflow: hidden;
+}
+
+.thumbnail-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #e9ecef;
+    font-size: 13px;
+    font-weight: 600;
+    color: #495057;
+}
+
+.rendered-count {
+    font-size: 11px;
+    color: #6c757d;
+    font-weight: 400;
+}
+
+.thumbnail-list-content {
+    display: flex;
+    flex-direction: column;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.thumbnail-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: none;
+    border-bottom: 1px solid #f1f3f4;
+    background: white;
+    cursor: pointer;
+    transition: background 0.15s ease;
+    text-align: left;
+}
+
+.thumbnail-item:last-child {
+    border-bottom: none;
+}
+
+.thumbnail-item:hover {
+    background: #f8f9fa;
+}
+
+.thumbnail-item.active {
+    background: #EEF2FF;
+    border-left: 3px solid #4F46E5;
+}
+
+.thumbnail-number {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f8f9fa;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #495057;
+}
+
+.thumbnail-item.active .thumbnail-number {
+    background: #4F46E5;
+    color: white;
+}
+
+.thumbnail-dimensions {
+    font-size: 11px;
+    color: #6c757d;
+    flex: 1;
+}
+
+.thumbnail-redactions {
+    font-size: 11px;
+    color: #dc3545;
+    font-weight: 500;
+}
+
+.thumbnail-status {
+    font-size: 12px;
+    color: #adb5bd;
+}
+
+.thumbnail-status.rendered {
+    color: #28a745;
+}
+
+/* ============================================
+   RESPONSIVE STYLES
+   ============================================ */
+
+@media (max-width: 768px) {
+    .page-navigation {
+        flex-wrap: wrap;
+    }
+
+    .page-info {
+        width: 100%;
+        margin-left: 0;
+        padding-left: 0;
+        border-left: none;
+        border-top: 1px solid #dee2e6;
+        padding-top: 8px;
+        margin-top: 4px;
+        justify-content: center;
+    }
+
+    .page-thumbnails {
+        width: 100%;
+        margin-left: 0;
+        padding-left: 0;
+        border-left: none;
+        border-top: 1px solid #dee2e6;
+        padding-top: 8px;
+        margin-top: 4px;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+}

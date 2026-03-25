@@ -32,3 +32,6 @@ export type {
     TransferState,
     IncomingTransferRequest
 } from './useP2PTransfer';
+
+// PDF Processing
+export { usePdfProcessor } from './usePdfProcessor';

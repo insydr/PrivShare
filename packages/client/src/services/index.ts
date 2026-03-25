@@ -55,3 +55,14 @@ export type {
     EncryptionProgress,
     ProgressCallback,
 } from './CryptoService';
+
+// PDF Processing
+export { PdfService, getPdfService, destroyPdfService } from './PdfService';
+export type {
+    PdfPageInfo,
+    PdfDocumentInfo,
+    RenderOptions,
+    RenderResult,
+    PdfLoadProgress,
+    ProgressCallback as PdfProgressCallback,
+} from './PdfService';

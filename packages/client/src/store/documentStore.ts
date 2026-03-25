@@ -8,6 +8,8 @@
  * All data is stored locally in browser memory - never sent to any server.
  * 
  * Collaboration features sync only JSON metadata (coordinates), never files.
+ * 
+ * Supports multi-page PDF documents with page-specific redactions.
  */
 
 import { create } from 'zustand';
@@ -23,6 +25,14 @@ import { mergeRedactions } from '../types/collaboration';
 // ============================================
 // TYPES
 // ============================================
+
+export interface PageInfo {
+    pageNumber: number;
+    width: number;
+    height: number;
+    rotation: number;
+    scale: number;
+}
 
 export interface RedactionArea {
     id: string;
@@ -47,16 +57,18 @@ export interface Document {
     width: number;
     height: number;
     format: string;
+    pages: PageInfo[];
     redactions: RedactionArea[];
     textRegions: TextRegion[];
     piiMatches: PiiMatch[];
     originalHash: string;
     redactedHash?: string;
     processedAt?: Date;
+    isPdf?: boolean;
 }
 
 export interface ProcessingState {
-    stage: 'idle' | 'loading' | 'processing' | 'redacting' | 'exporting' | 'error';
+    stage: 'idle' | 'loading' | 'processing' | 'rendering' | 'redacting' | 'exporting' | 'error';
     progress: number;
     message: string;
 }
@@ -87,6 +99,11 @@ interface DocumentState {
     currentBuffer: ArrayBuffer | null;
     previewBuffer: ArrayBuffer | null;
     
+    // Multi-page support
+    pageImageData: Map<number, ImageData>;  // Page number -> ImageData
+    pdfBuffer: ArrayBuffer | null;          // Original PDF buffer for multi-page docs
+    renderedPages: Set<number>;             // Track which pages have been rendered
+    
     // Processing state
     processing: ProcessingState;
     
@@ -109,16 +126,24 @@ interface DocumentState {
     setCurrentBuffer: (buffer: ArrayBuffer | null) => void;
     setPreviewBuffer: (buffer: ArrayBuffer | null) => void;
     
+    // Actions - Multi-page
+    setPageImageData: (pageNumber: number, data: ImageData) => void;
+    getPageImageData: (pageNumber: number) => ImageData | null;
+    setPdfBuffer: (buffer: ArrayBuffer | null) => void;
+    clearPageCache: () => void;
+    
     // Actions - Redactions
     addRedaction: (redaction: RedactionArea) => void;
     removeRedaction: (id: string) => void;
     updateRedaction: (id: string, updates: Partial<RedactionArea>) => void;
     clearRedactions: () => void;
+    clearPageRedactions: (pageIndex: number) => void;
     setSelectedRedaction: (id: string | null) => void;
     
     // Actions - Text & PII
     setTextRegions: (regions: TextRegion[]) => void;
     setPiiMatches: (matches: PiiMatch[]) => void;
+    setPagePiiMatches: (pageIndex: number, matches: PiiMatch[]) => void;
     
     // Actions - Processing
     setProcessing: (state: ProcessingState) => void;
@@ -168,6 +193,9 @@ const initialState = {
     imageData: null,
     currentBuffer: null,
     previewBuffer: null,
+    pageImageData: new Map<number, ImageData>(),
+    pdfBuffer: null,
+    renderedPages: new Set<number>(),
     processing: {
         stage: 'idle' as const,
         progress: 0,
@@ -200,6 +228,42 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     setCurrentBuffer: (buffer) => set({ currentBuffer: buffer }),
     
     setPreviewBuffer: (buffer) => set({ previewBuffer: buffer }),
+
+    // ============================================
+    // MULTI-PAGE ACTIONS
+    // ============================================
+
+    setPageImageData: (pageNumber, data) => set((state) => {
+        const newPageImageData = new Map(state.pageImageData);
+        newPageImageData.set(pageNumber, data);
+        const newRenderedPages = new Set(state.renderedPages);
+        newRenderedPages.add(pageNumber);
+        
+        // Also update the main imageData if this is the current page
+        if (pageNumber === state.currentPage) {
+            return {
+                pageImageData: newPageImageData,
+                renderedPages: newRenderedPages,
+                imageData: data,
+            };
+        }
+        
+        return {
+            pageImageData: newPageImageData,
+            renderedPages: newRenderedPages,
+        };
+    }),
+
+    getPageImageData: (pageNumber) => {
+        return get().pageImageData.get(pageNumber) || null;
+    },
+
+    setPdfBuffer: (buffer) => set({ pdfBuffer: buffer }),
+
+    clearPageCache: () => set({
+        pageImageData: new Map(),
+        renderedPages: new Set(),
+    }),
 
     // ============================================
     // REDACTION ACTIONS
@@ -249,6 +313,15 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             : null,
     })),
 
+    clearPageRedactions: (pageIndex) => set((state) => ({
+        document: state.document
+            ? {
+                  ...state.document,
+                  redactions: state.document.redactions.filter((r) => r.pageIndex !== pageIndex),
+              }
+            : null,
+    })),
+
     setSelectedRedaction: (id) => set({ selectedRedaction: id }),
 
     // ============================================
@@ -262,16 +335,18 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     })),
 
     setPiiMatches: (matches) => set((state) => {
-        // Auto-create redactions for PII matches
+        const currentPage = state.currentPage;
+        
+        // Auto-create redactions for PII matches on the current page
         const autoRedactions: RedactionArea[] = matches.map((match, index) => {
             const region = state.document?.textRegions[match.regionIndex];
             return {
-                id: `pii-${index}`,
+                id: `pii-page${currentPage}-${index}`,
                 x: region?.x ?? 0,
                 y: region?.y ?? 0,
                 width: region?.width ?? 100,
                 height: region?.height ?? 20,
-                pageIndex: 0,
+                pageIndex: currentPage,
                 type: 'auto' as const,
                 piiType: match.piiType,
                 confidence: match.confidence,
@@ -280,13 +355,59 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             };
         });
 
+        // Remove existing auto redactions for this page and add new ones
+        const existingManualRedactions = state.document?.redactions.filter(r => r.type !== 'auto') ?? [];
+        const existingAutoRedactionsOtherPages = state.document?.redactions.filter(
+            r => r.type === 'auto' && r.pageIndex !== currentPage
+        ) ?? [];
+
         return {
             document: state.document
                 ? {
                       ...state.document,
                       piiMatches: matches,
                       redactions: [
-                          ...state.document.redactions.filter(r => r.type !== 'auto'),
+                          ...existingManualRedactions,
+                          ...existingAutoRedactionsOtherPages,
+                          ...autoRedactions,
+                      ],
+                  }
+                : null,
+        };
+    }),
+
+    setPagePiiMatches: (pageIndex, matches) => set((state) => {
+        // Auto-create redactions for PII matches on the specified page
+        const autoRedactions: RedactionArea[] = matches.map((match, index) => {
+            const region = state.document?.textRegions[match.regionIndex];
+            return {
+                id: `pii-page${pageIndex}-${index}`,
+                x: region?.x ?? 0,
+                y: region?.y ?? 0,
+                width: region?.width ?? 100,
+                height: region?.height ?? 20,
+                pageIndex: pageIndex,
+                type: 'auto' as const,
+                piiType: match.piiType,
+                confidence: match.confidence,
+                createdAt: Date.now(),
+                userId: 'system',
+            };
+        });
+
+        // Remove existing auto redactions for this page and add new ones
+        const existingManualRedactions = state.document?.redactions.filter(r => r.type !== 'auto') ?? [];
+        const existingAutoRedactionsOtherPages = state.document?.redactions.filter(
+            r => r.type === 'auto' && r.pageIndex !== pageIndex
+        ) ?? [];
+
+        return {
+            document: state.document
+                ? {
+                      ...state.document,
+                      redactions: [
+                          ...existingManualRedactions,
+                          ...existingAutoRedactionsOtherPages,
                           ...autoRedactions,
                       ],
                   }
@@ -308,7 +429,15 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     // VIEW ACTIONS
     // ============================================
 
-    setCurrentPage: (page) => set({ currentPage: page }),
+    setCurrentPage: (page) => set((state) => {
+        // Get the image data for the new page if it exists
+        const pageData = state.pageImageData.get(page);
+        
+        return {
+            currentPage: page,
+            imageData: pageData || state.imageData,
+        };
+    }),
 
     setZoom: (zoom) => set({ zoom: Math.max(0.1, Math.min(5, zoom)) }),
 
@@ -440,6 +569,9 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
         imageData: null,
         currentBuffer: null,
         previewBuffer: null,
+        pageImageData: new Map(),
+        pdfBuffer: null,
+        renderedPages: new Set(),
         processing: { stage: 'idle', progress: 0, message: '' },
         currentPage: 0,
         zoom: 1,
@@ -457,6 +589,8 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
 export const selectDocument = (state: DocumentState) => state.document;
 export const selectImageData = (state: DocumentState) => state.imageData;
 export const selectRedactions = (state: DocumentState) => state.document?.redactions ?? [];
+export const selectCurrentPageRedactions = (state: DocumentState) => 
+    state.document?.redactions.filter(r => r.pageIndex === state.currentPage) ?? [];
 export const selectProcessing = (state: DocumentState) => state.processing;
 export const selectIsProcessing = (state: DocumentState) => 
     state.processing.stage !== 'idle' && state.processing.stage !== 'error';
@@ -469,3 +603,7 @@ export const selectCollaborators = (state: DocumentState) => state.collaboration
 export const selectCursors = (state: DocumentState) => state.collaboration.cursors;
 export const selectIsConnected = (state: DocumentState) => 
     state.collaboration.connectionState === 'connected';
+export const selectCurrentPage = (state: DocumentState) => state.currentPage;
+export const selectPageCount = (state: DocumentState) => state.document?.pageCount ?? 1;
+export const selectPageInfo = (state: DocumentState, pageNumber: number) => 
+    state.document?.pages.find(p => p.pageNumber === pageNumber);

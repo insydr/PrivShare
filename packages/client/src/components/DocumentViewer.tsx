@@ -29,6 +29,7 @@ import { useDocumentStore } from '../store/documentStore';
 import { useWasmProcessor } from '../hooks/useWasmProcessor';
 import { CollaboratorCursors, CollaboratorList } from './CollaboratorCursors';
 import { PolicyValidationModal } from './PolicyValidationModal';
+import { PageNavigation } from './PageNavigation';
 import './DocumentViewer.css';
 
 // ============================================
@@ -70,6 +71,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         currentBuffer,
         processing,
         zoom,
+        currentPage,
         selectedRedaction,
         collaboration,
         setZoom,
@@ -79,6 +81,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
         setProcessing,
         clearDocument,
         mergeRemoteRedactions,
+        setCurrentPage,
     } = useDocumentStore();
 
     // ============================================
@@ -119,7 +122,14 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
     // DERIVED VALUES
     // ============================================
 
-    const redactionBoxes = useMemo(() => doc?.redactions ?? [], [doc?.redactions]);
+    // Filter redaction boxes for current page only
+    const redactionBoxes = useMemo(() => 
+        (doc?.redactions ?? []).filter(r => r.pageIndex === currentPage),
+        [doc?.redactions, currentPage]
+    );
+    const totalRedactionCount = doc?.redactions.length ?? 0;
+    const pageCount = doc?.pageCount ?? 1;
+    const isMultiPage = pageCount > 1;
     const hasDocument = imageData !== null;
     const isProcessing = processing.stage !== 'idle' && processing.stage !== 'error';
     const isConnected = collaboration.connectionState === 'connected';
@@ -459,7 +469,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                 width: Math.round(currentRect.width),
                 height: Math.round(currentRect.height),
                 type: 'manual',
-                pageIndex: 0,
+                pageIndex: currentPage,
                 createdAt: Date.now(),
             };
 
@@ -678,6 +688,11 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
+            // Skip if typing in an input field
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+                return;
+            }
+
             if ((e.key === 'Delete' || e.key === 'Backspace') && selectedRedaction) {
                 removeRedaction(selectedRedaction);
                 setSelectedRedaction(null);
@@ -694,10 +709,26 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                 setZoom(Math.max(zoom - 0.1, 0.1));
             }
 
+            // Page navigation shortcuts (for multi-page documents)
+            if (isMultiPage && !isFinalized) {
+                if (e.key === 'PageUp' || (e.key === 'ArrowUp' && e.ctrlKey)) {
+                    e.preventDefault();
+                    if (currentPage > 0) {
+                        setCurrentPage(currentPage - 1);
+                    }
+                }
+                if (e.key === 'PageDown' || (e.key === 'ArrowDown' && e.ctrlKey)) {
+                    e.preventDefault();
+                    if (currentPage < pageCount - 1) {
+                        setCurrentPage(currentPage + 1);
+                    }
+                }
+            }
+
             // Ctrl+Enter to finalize
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault();
-                if (hasDocument && !isFinalized && redactionBoxes.length > 0) {
+                if (hasDocument && !isFinalized && totalRedactionCount > 0) {
                     handleFinalize();
                 }
             }
@@ -705,7 +736,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedRedaction, removeRedaction, setSelectedRedaction, zoom, setZoom, hasDocument, isFinalized, redactionBoxes.length, handleFinalize]);
+    }, [selectedRedaction, removeRedaction, setSelectedRedaction, zoom, setZoom, hasDocument, isFinalized, totalRedactionCount, handleFinalize, isMultiPage, currentPage, pageCount, setCurrentPage]);
 
     // ============================================
     // TOOLBAR ACTIONS
@@ -826,7 +857,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                             className="tool-btn primary finalize-btn"
                             onClick={handleFinalize}
                             title="Finalize Redactions (Ctrl+Enter)"
-                            disabled={!hasDocument || redactionBoxes.length === 0 || isProcessing || !wasmReady}
+                            disabled={!hasDocument || totalRedactionCount === 0 || isProcessing || !wasmReady}
                         >
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                 <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
@@ -903,9 +934,10 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                     {!wasmReady && (
                         <span className="wasm-status loading">Loading WASM...</span>
                     )}
-                    {redactionBoxes.length > 0 && !isFinalized && (
+                    {totalRedactionCount > 0 && !isFinalized && (
                         <span className="redaction-count">
-                            {redactionBoxes.length} redaction{redactionBoxes.length !== 1 ? 's' : ''}
+                            {totalRedactionCount} redaction{totalRedactionCount !== 1 ? 's' : ''}
+                            {isMultiPage && <span className="page-redactions"> ({redactionBoxes.length} on this page)</span>}
                         </span>
                     )}
                     {isFinalized && (
@@ -1006,11 +1038,24 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
                 )}
             </div>
 
+            {/* Page Navigation */}
+            {hasDocument && isMultiPage && !isFinalized && (
+                <div className="page-nav-container">
+                    <PageNavigation
+                        onPageChange={(page) => {
+                            console.log('[DocumentViewer] Changed to page:', page);
+                        }}
+                    />
+                </div>
+            )}
+
             {/* Status Bar */}
             {hasDocument && (
                 <div className="status-bar">
                     <span className="file-info">
-                        {doc?.name} • {doc?.width}×{doc?.height}px
+                        {doc?.name}
+                        {isMultiPage && <span className="page-indicator"> • Page {currentPage + 1} of {pageCount}</span>}
+                        {!isMultiPage && <span> • {doc?.width}×{doc?.height}px</span>}
                     </span>
                     {doc?.originalHash && (
                         <span className="hash-info" title={`SHA-256: ${doc.originalHash}`}>

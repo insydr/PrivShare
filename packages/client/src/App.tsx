@@ -10,7 +10,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { DocumentViewer, AnalysisPanel } from './components';
-import { useWasmProcessor } from './hooks';
+import { useWasmProcessor, usePdfProcessor } from './hooks';
 import { useDocumentStore } from './store/documentStore';
 
 import './styles/index.css';
@@ -26,6 +26,12 @@ function App() {
     } = useWasmProcessor({ autoInit: true, debug: true });
 
     const {
+        loadPdf,
+        renderPage,
+        unloadPdf,
+    } = usePdfProcessor({ renderScale: 1.5, debug: true });
+
+    const {
         document,
         imageData,
         processing,
@@ -36,6 +42,7 @@ function App() {
         setWasmReady,
         setWasmError,
         clearDocument,
+        setCurrentPage,
     } = useDocumentStore();
 
     const [isDragOver, setIsDragOver] = useState(false);
@@ -48,6 +55,42 @@ function App() {
             setWasmError(wasmError);
         }
     }, [isReady, wasmError, setWasmReady, setWasmError]);
+
+    // Handle page changes for multi-page PDFs - render pages on demand
+    useEffect(() => {
+        const handlePageChange = async (e: Event) => {
+            const customEvent = e as CustomEvent<{ page: number }>;
+            const { page } = customEvent.detail;
+            
+            // Only handle if we have a PDF document
+            if (!document?.isPdf) return;
+            
+            // Check if page is already rendered
+            const { pageImageData } = useDocumentStore.getState();
+            if (pageImageData.has(page)) {
+                // Page already rendered, just update the image data
+                return;
+            }
+            
+            // Render the page
+            console.log('[App] Rendering page', page + 1, 'on demand');
+            setProcessing({ stage: 'rendering', progress: 0, message: `Rendering page ${page + 1}...` });
+            
+            const result = await renderPage(page + 1); // PDF pages are 1-indexed
+            
+            if (result) {
+                console.log('[App] Page', page + 1, 'rendered successfully');
+            }
+            
+            setProcessing({ stage: 'idle', progress: 100, message: '' });
+        };
+
+        window.addEventListener('page:change', handlePageChange);
+        
+        return () => {
+            window.removeEventListener('page:change', handlePageChange);
+        };
+    }, [document?.isPdf, renderPage, setProcessing]);
 
     // ============================================
     // FILE HANDLING
@@ -83,8 +126,11 @@ function App() {
         }
 
         // Validate file type
-        const validTypes = ['image/png', 'image/jpeg', 'image/tiff', 'image/bmp', 'image/webp'];
-        if (!validTypes.includes(file.type) && !file.name.toLowerCase().endsWith('.pdf')) {
+        const validImageTypes = ['image/png', 'image/jpeg', 'image/tiff', 'image/bmp', 'image/webp'];
+        const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+        const isValidImage = validImageTypes.includes(file.type);
+        
+        if (!isValidImage && !isPdf) {
             alert('Invalid file type. Please use PNG, JPEG, TIFF, BMP, WebP, or PDF.');
             return;
         }
@@ -99,47 +145,110 @@ function App() {
         setProcessing({ stage: 'loading', progress: 10, message: 'Reading file...' });
 
         try {
-            console.log('[App] Processing file:', file.name);
+            console.log('[App] Processing file:', file.name, isPdf ? '(PDF)' : '(Image)');
 
-            // Load image using WASM (runs in worker, non-blocking)
-            setProcessing({ stage: 'processing', progress: 30, message: 'Processing with WASM...' });
-
-            const result = await loadImage(file);
-
-            console.log('[App] Image loaded:', result.dimensions);
-            console.log('[App] Hash:', result.hash);
-
-            // Create document record
-            const doc = {
-                id: `doc-${Date.now()}`,
-                name: file.name,
-                size: file.size,
-                type: file.type,
-                pageCount: 1,
-                width: result.dimensions.width,
-                height: result.dimensions.height,
-                format: result.info.format,
-                redactions: [],
-                textRegions: [],
-                piiMatches: [],
-                originalHash: result.hash,
-                processedAt: new Date(),
-            };
-
-            // Update store
-            setDocument(doc);
-            setImageData(result.imageData);
-
-            // Store original buffer for later redaction
             const buffer = await file.arrayBuffer();
-            setCurrentBuffer(buffer);
 
-            setProcessing({ stage: 'idle', progress: 100, message: 'Ready' });
+            if (isPdf) {
+                // Handle PDF file
+                setProcessing({ stage: 'loading', progress: 20, message: 'Loading PDF document...' });
+
+                const pdfInfo = await loadPdf(buffer);
+                if (!pdfInfo) {
+                    throw new Error('Failed to load PDF document');
+                }
+
+                console.log('[App] PDF loaded:', pdfInfo.pageCount, 'pages');
+
+                // Render the first page
+                setProcessing({ stage: 'rendering', progress: 50, message: 'Rendering first page...' });
+                const firstPage = await renderPage(1);
+                if (!firstPage) {
+                    throw new Error('Failed to render first page');
+                }
+
+                // Create document record for multi-page PDF
+                const doc = {
+                    id: `doc-${Date.now()}`,
+                    name: file.name,
+                    size: file.size,
+                    type: file.type,
+                    pageCount: pdfInfo.pageCount,
+                    width: firstPage.width,
+                    height: firstPage.height,
+                    format: 'PDF',
+                    pages: pdfInfo.pages.map((p, i) => ({
+                        pageNumber: i + 1,
+                        width: p.width,
+                        height: p.height,
+                        rotation: p.rotation,
+                        scale: p.scale,
+                    })),
+                    redactions: [],
+                    textRegions: [],
+                    piiMatches: [],
+                    originalHash: pdfInfo.fingerprint,
+                    processedAt: new Date(),
+                    isPdf: true,
+                };
+
+                // Update store
+                setDocument(doc);
+                setImageData(firstPage.imageData);
+                setCurrentBuffer(buffer);
+                setCurrentPage(0);
+
+                setProcessing({ stage: 'idle', progress: 100, message: 'Ready' });
+
+                console.log('[App] PDF document ready for editing');
+
+            } else {
+                // Handle image file (existing logic)
+                setProcessing({ stage: 'processing', progress: 30, message: 'Processing with WASM...' });
+
+                const result = await loadImage(file);
+
+                console.log('[App] Image loaded:', result.dimensions);
+                console.log('[App] Hash:', result.hash);
+
+                // Create document record
+                const doc = {
+                    id: `doc-${Date.now()}`,
+                    name: file.name,
+                    size: file.size,
+                    type: file.type,
+                    pageCount: 1,
+                    width: result.dimensions.width,
+                    height: result.dimensions.height,
+                    format: result.info.format,
+                    pages: [{
+                        pageNumber: 1,
+                        width: result.dimensions.width,
+                        height: result.dimensions.height,
+                        rotation: 0,
+                        scale: 1,
+                    }],
+                    redactions: [],
+                    textRegions: [],
+                    piiMatches: [],
+                    originalHash: result.hash,
+                    processedAt: new Date(),
+                    isPdf: false,
+                };
+
+                // Update store
+                setDocument(doc);
+                setImageData(result.imageData);
+                setCurrentBuffer(buffer);
+
+                setProcessing({ stage: 'idle', progress: 100, message: 'Ready' });
+
+                console.log('[App] Document ready for editing');
+            }
 
             // Show sidebar when document is loaded
             setShowSidebar(true);
 
-            console.log('[App] Document ready for editing');
         } catch (error) {
             console.error('[App] Failed to process file:', error);
             setProcessing({
@@ -148,7 +257,7 @@ function App() {
                 message: error instanceof Error ? error.message : 'Failed to process file'
             });
         }
-    }, [isReady, loadImage, setDocument, setImageData, setCurrentBuffer, setProcessing]);
+    }, [isReady, loadImage, loadPdf, renderPage, setDocument, setImageData, setCurrentBuffer, setProcessing, setCurrentPage]);
 
     // ============================================
     // FILE INPUT HANDLER
@@ -172,7 +281,8 @@ function App() {
             }
         }
         clearDocument();
-    }, [document, clearDocument]);
+        unloadPdf();
+    }, [document, clearDocument, unloadPdf]);
 
     // ============================================
     // RENDER
@@ -232,7 +342,7 @@ function App() {
                                 <line x1="9" y1="15" x2="15" y2="15"/>
                             </svg>
                             <h2>Drop your document here</h2>
-                            <p>PNG, JPEG, TIFF, BMP, WebP files supported</p>
+                            <p>PNG, JPEG, TIFF, BMP, WebP, PDF files supported</p>
                             <p className="size-limit">Maximum file size: 50MB</p>
 
                             <div className="security-notice">
@@ -246,7 +356,7 @@ function App() {
                             <input
                                 type="file"
                                 id="file-input"
-                                accept=".png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp"
+                                accept=".png,.jpg,.jpeg,.tiff,.tif,.bmp,.webp,.pdf"
                                 onChange={handleFileInputChange}
                                 style={{ display: 'none' }}
                                 disabled={!isReady}
